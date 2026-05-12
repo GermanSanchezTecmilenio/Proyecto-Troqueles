@@ -1,4 +1,5 @@
 const TOKEN_KEY = "zsistema_token";
+const API_BASE_URL = (window.ZSISTEMA_API_BASE_URL || "").replace(/\/$/, "");
 
 export function getToken() {
   const token = sessionStorage.getItem(TOKEN_KEY);
@@ -30,7 +31,8 @@ export async function api(path, options = {}) {
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  const response = await fetch(path, { ...options, headers });
+  const url = path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
+  const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     let message = `Error ${response.status}`;
     try {

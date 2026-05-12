@@ -162,6 +162,28 @@ Invoke-RestMethod "http://localhost:8080/api/almacen/kardex" -Headers $headers
 Invoke-RestMethod "http://localhost:8080/api/remisiones" -Headers $headers
 ```
 
+## Publicacion en Netlify
+
+Netlify sirve correctamente el frontend estatico, pero no ejecuta este backend Node/Express ni levanta MySQL como servidor permanente.
+
+Para Netlify se agrego:
+
+| Archivo | Uso |
+|---|---|
+| `netlify.toml` | Indica que Netlify publique `public/` y redirija rutas al `index.html`. |
+| `scripts/write-netlify-config.mjs` | Genera `public/config.js` con la URL del backend. |
+| `public/config.js` | Archivo generado durante build; define `window.ZSISTEMA_API_BASE_URL`. |
+
+Configuracion recomendada en Netlify:
+
+| Campo | Valor |
+|---|---|
+| Build command | `node scripts/write-netlify-config.mjs` |
+| Publish directory | `public` |
+| Environment variable | `ZSISTEMA_API_BASE_URL=https://URL-DE-TU-BACKEND` |
+
+El backend debe hospedarse aparte en un servicio que soporte Node.js persistente y MySQL, por ejemplo Render, Railway, Azure App Service, Azure Container Apps o un VPS. Si no defines `ZSISTEMA_API_BASE_URL`, el frontend intentara llamar `/api/**` en el mismo dominio de Netlify y el login no funcionara.
+
 ## Endpoints Principales
 
 | Modulo | Metodo | Ruta | Uso |
@@ -250,5 +272,3 @@ Tambien confirma que `.env` tenga `DB_USER`, `DB_PASSWORD` y `DB_URL` correctos.
 - [Modelo de datos inicial](docs/modelo-datos-inicial.md)
 - [Seguridad operativa](docs/seguridad.md)
 - [Pendientes de validacion](docs/pendientes-validacion.md)
-#   P r o y e c t o - T r o q u e l e s  
- 
