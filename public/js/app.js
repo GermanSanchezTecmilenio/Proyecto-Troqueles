@@ -11,8 +11,8 @@ const navToggle = document.querySelector("#nav-toggle");
 const menuHomeButton = document.querySelector("#menu-home-button");
 const currentUser = document.querySelector("#current-user");
 
-const GODMISA_INTERNAL_PIEZA_ID = 2460;
-const GODMISA_INTERNAL_DESTINO = "GODMISA (ALMACEN, INGENIERIA O TALLER)";
+const TORNOS_INTERNAL_PIEZA_ID = 2460;
+const TORNOS_INTERNAL_DESTINO = "TORNOS SA DE CV (ALMACEN, INGENIERIA O TALLER)";
 const MEDIDAS_REQUISICION = ["PIEZAS", "CAJAS", "PAQUETES", "KILOS", "GRAMOS", "METROS", "CMS", "PULGADAS", "LIBRAS", "PIES", "BLISTER"];
 const DASHBOARD_CHART_COLORS = ["#0f77b8", "#21a67a", "#e3b505", "#b42318", "#6f7d95", "#5aa9e6"];
 const MONITOR_SHORTCUTS = [
@@ -40,7 +40,7 @@ const OFFICIAL_ACTIVITIES = [
   {
     name: "Troquelado compuesto",
     category: "Troquelado",
-    provider: "God Maquinados, S.A. de C.V. Godmisa",
+    provider: "Tornos SA de CV",
     coverage: "Nacional",
     description: "Fabricacion de piezas metalicas, troqueles restaurados y fixtures de inspeccion o ensamble.",
     source: "https://www.cosmos.com.mx/producto/troquelado-bntc/troquelado-compuesto-gsj1i444b.html"
@@ -67,7 +67,7 @@ const moduleCards = {
   clientes: { label: "Clientes", detail: "Datos fiscales y contactos", icon: "CL", image: "clientes.svg", tone: "teal", parent: "catalogosMenu" },
   proveedores: { label: "Proveedores", detail: "Pagos, RFC y retenciones", icon: "PV", image: "proveedores.svg", tone: "sky", parent: "catalogosMenu" },
   operadores: { label: "Operadores", detail: "Personal de taller y choferes", icon: "OP", image: "operadores.svg", tone: "amber", parent: "catalogosMenu" },
-  actividades: { label: "Actividades", detail: "Operaciones oficiales GODMISA", icon: "AC", image: "actividades.svg", tone: "blue", parent: "produccionMenu" },
+  actividades: { label: "Actividades", detail: "Operaciones oficiales Tornos SA de CV", icon: "AC", image: "actividades.svg", tone: "blue", parent: "produccionMenu" },
   piezas: { label: "Piezas", detail: "Alta y detalle de piezas", icon: "PZ", image: "piezas.svg", tone: "indigo", parent: "produccionMenu" },
   ordenes: { label: "Ordenes de trabajo", detail: "Agrupar piezas por OT", icon: "OT", image: "ordenes.svg", tone: "steel", parent: "produccionMenu" },
   monitor: { label: "Monitor de produccion", detail: "Estatus, notas y seguimiento", icon: "MN", image: "monitor.svg", tone: "green", parent: "produccionMenu" },
@@ -263,11 +263,11 @@ const importConfigs = {
       prioridad: textFromCsv(row, ["prioridad"], "Normal"),
       observaciones: textFromCsv(row, ["observaciones"]),
       detalles: [{
-        piezaId: numberFromCsv(row, ["piezaId", "id pieza"], GODMISA_INTERNAL_PIEZA_ID),
+        piezaId: numberFromCsv(row, ["piezaId", "id pieza"], TORNOS_INTERNAL_PIEZA_ID),
         descripcion: textFromCsv(row, ["descripcion", "descripcion material", "detalle"]),
         cantidad: numberFromCsv(row, ["cantidad", "cant"], 1),
         unidadMedida: textFromCsv(row, ["unidadMedida", "unidad", "medida"], "PIEZAS"),
-        destino: textFromCsv(row, ["destino"], GODMISA_INTERNAL_DESTINO),
+        destino: textFromCsv(row, ["destino"], TORNOS_INTERNAL_DESTINO),
         material: textFromCsv(row, ["material"])
       }]
     })
@@ -398,7 +398,7 @@ async function navigate(viewName) {
   const view = views[activeViewName];
   currentViewName = activeViewName;
   title.textContent = view.title;
-  eyebrow.textContent = view.eyebrow || "MVP Tornos";
+  eyebrow.textContent = view.eyebrow || "Tornos SA de CV";
   actions.innerHTML = "";
   root.innerHTML = document.querySelector("#loading-template").innerHTML;
   const activeNavViewName = activeNavViewFor(activeViewName);
@@ -489,7 +489,7 @@ async function renderDashboard() {
   soonDate.setDate(soonDate.getDate() + 7);
   const soonLimit = soonDate.toISOString().slice(0, 10);
 
-  const trackedPieces = cache.piezas.filter(p => p.id !== GODMISA_INTERNAL_PIEZA_ID);
+  const trackedPieces = cache.piezas.filter(p => p.id !== TORNOS_INTERNAL_PIEZA_ID);
   const pendingPieces = trackedPieces.filter(p => !p.entregado);
   const overduePieces = pendingPieces.filter(p => p.fechaCompromiso && p.fechaCompromiso < today);
   const dueSoonPieces = pendingPieces.filter(p => p.fechaCompromiso && p.fechaCompromiso >= today && p.fechaCompromiso <= soonLimit);
@@ -797,7 +797,7 @@ async function renderProveedores() {
 
 async function renderAltas() {
   await loadReferenceData();
-  const pendientes = cache.piezas.filter(p => !p.entregado && !p.ordenTrabajoId && p.id !== GODMISA_INTERNAL_PIEZA_ID);
+  const pendientes = cache.piezas.filter(p => !p.entregado && !p.ordenTrabajoId && p.id !== TORNOS_INTERNAL_PIEZA_ID);
   root.innerHTML = `
     <div class="module-grid">
       <button class="module-tile" data-go="piezas">
@@ -1014,7 +1014,7 @@ function drawingLabel(archivo) {
 async function renderOrdenes() {
   await loadReferenceData();
   const ordenes = await api("/api/ordenes-trabajo");
-  const pendientes = cache.piezas.filter(p => !p.entregado && !p.ordenTrabajoId && p.id !== GODMISA_INTERNAL_PIEZA_ID);
+  const pendientes = cache.piezas.filter(p => !p.entregado && !p.ordenTrabajoId && p.id !== TORNOS_INTERNAL_PIEZA_ID);
   const clienteInicial = pendientes[0]?.clienteId || cache.clientes[0]?.id || "";
   const previewOrden = ordenes.find(orden => orden.id === lastOrdenTrabajoPreviewId) || ordenes[0] || null;
   root.innerHTML = `
@@ -1039,7 +1039,10 @@ async function renderOrdenes() {
           o.ordenCompra || "",
           o.fechaCompromiso,
           o.piezaIds?.length || 0,
-          `<button class="secondary compact-button ot-preview-button" data-ot-id="${o.id}">Ver</button>`
+          `<div class="split-actions compact-actions">
+            <button class="secondary compact-button ot-preview-button" data-ot-id="${o.id}">Ver</button>
+            <button class="secondary compact-button ot-pdf-button" data-ot-id="${o.id}">PDF</button>
+          </div>`
         ]))}
       </div>
     </div>`;
@@ -1076,6 +1079,12 @@ async function renderOrdenes() {
       const orden = ordenes.find(item => item.id === Number(button.dataset.otId));
       lastOrdenTrabajoPreviewId = orden?.id || null;
       document.querySelector("#ot-preview").innerHTML = ordenTrabajoPreview(orden, cache.piezas);
+    });
+  });
+  document.querySelectorAll(".ot-pdf-button").forEach(button => {
+    button.addEventListener("click", async () => {
+      const blob = await api(`/api/ordenes-trabajo/${button.dataset.otId}/pdf`);
+      window.open(URL.createObjectURL(blob), "_blank", "noopener");
     });
   });
   document.querySelector("#ot-form").addEventListener("submit", async event => {
@@ -1209,7 +1218,7 @@ function monitorShortcutHelp() {
 
 function monitorTable(rows) {
   if (!rows.length) return `<div class="table-wrap empty-state">Sin registros</div>`;
-  const headers = ["Pieza", "OT", "Cliente", "OC", "Descripcion", "Cant.", "Entregada", "Compromiso", "Dias", "Estatus", ""];
+  const headers = ["Pieza", "OT", "Cliente", "OC", "Descripcion", "Cant.", "Entregada", "Compromiso", "Dias", "Estatus", "Estimacion", ""];
   const safeHeaders = headers.map(h => escapeHtml(h));
   return `
     <div class="table-wrap monitor-table-wrap">
@@ -1229,6 +1238,7 @@ function monitorTable(rows) {
             escapeHtml(p.fechaCompromiso || ""),
             badge(p.diasCompromiso, p.vencida ? "danger" : "ok"),
             escapeHtml(p.estatus || ""),
+            monitorEstimateLabel(p),
             `<button class="secondary status-button" data-pieza-id="${piezaId}">Estatus / notas</button>`
           ];
           return `
@@ -1238,6 +1248,14 @@ function monitorTable(rows) {
         }).join("")}</tbody>
       </table>
     </div>`;
+}
+
+function monitorEstimateLabel(row) {
+  const hours = Number(row.horasEstimadas || 0);
+  const cost = Number(row.costoEstimado || 0);
+  if (!hours && !cost) return `<span class="muted">Sin estimacion</span>`;
+  const costLabel = row.monedaEstimacion === "USD" ? formatUsd(cost) : formatMoney(cost);
+  return `${hours ? `${hours} h` : "Sin horas"} | ${costLabel}`;
 }
 
 function selectMonitorRow(piezaId) {
@@ -1279,7 +1297,8 @@ async function handleMonitorShortcut(action) {
     return;
   }
   if (action === "estimate") {
-    setMonitorMessage("F4 Estimacion: pendiente de campo dedicado; usa Captura de tiempos para registrar avance.", "warning");
+    await openEstimatePanel(piezaId);
+    setMonitorMessage(`F4 Estimacion abierta para pieza ${piezaId}.`);
     return;
   }
   if (action === "status") {
@@ -1293,8 +1312,8 @@ async function handleMonitorShortcut(action) {
     return;
   }
   if (action === "partial") {
-    if (piezaId === GODMISA_INTERNAL_PIEZA_ID) {
-      setMonitorMessage("La pieza interna GODMISA no se da de baja por remision.", "warning");
+    if (piezaId === TORNOS_INTERNAL_PIEZA_ID) {
+      setMonitorMessage("La pieza interna Tornos SA de CV no se da de baja por remision.", "warning");
       return;
     }
     pendingRemisionPiezaId = piezaId;
@@ -1302,8 +1321,9 @@ async function handleMonitorShortcut(action) {
     return;
   }
   if (action === "pdf") {
-    exportCurrentViewPdf();
-    setMonitorMessage("F12 genero el PDF del monitor actual.");
+    const blob = await api(`/api/piezas/${piezaId}/pdf`);
+    window.open(URL.createObjectURL(blob), "_blank", "noopener");
+    setMonitorMessage(`F12 abrio la ficha PDF de la pieza ${piezaId}.`);
   }
 }
 
@@ -1332,7 +1352,7 @@ function setMonitorMessage(message, tone = "") {
   target.classList.toggle("error-message", tone === "error");
 }
 
-async function openStatusPanel(piezaId, options = {}) {
+async function openStatusPanel(piezaId, panelOptions = {}) {
   const pieza = cache.piezas.find(item => item.id === piezaId);
   const notas = await api(`/api/piezas/${piezaId}/notas`);
   const panel = document.querySelector("#status-panel");
@@ -1357,7 +1377,7 @@ async function openStatusPanel(piezaId, options = {}) {
       escapeHtml(n.nota)
     ]))}`;
   panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  if (options.focusNote) {
+  if (panelOptions.focusNote) {
     document.querySelector("#status-form textarea[name='nota']")?.focus();
   }
   document.querySelector("#status-cancel").addEventListener("click", () => {
@@ -1370,6 +1390,53 @@ async function openStatusPanel(piezaId, options = {}) {
     await api(`/api/piezas/${piezaId}/estatus`, { method: "PUT", body: JSON.stringify(data) });
     await navigate("monitor");
   });
+}
+
+async function openEstimatePanel(piezaId) {
+  const pieza = cache.piezas.find(item => item.id === piezaId);
+  const estimaciones = await api(`/api/piezas/${piezaId}/estimaciones`);
+  const panel = document.querySelector("#status-panel");
+  panel.hidden = false;
+  panel.innerHTML = `
+    <form class="form-grid" id="estimate-form">
+      <div class="wide">
+        <strong>Pieza ${piezaId}</strong>
+        <p class="muted">${escapeHtml(pieza?.descripcion || "")}</p>
+      </div>
+      <label>Descripcion<input name="descripcion" value="Estimacion de produccion" required></label>
+      <label>Horas estimadas<input name="horasEstimadas" type="number" step="0.25" min="0" value="${estimateSuggestedHours(pieza)}"></label>
+      <label>Costo estimado<input name="costoEstimado" type="number" step="0.01" min="0" value="${Number(pieza?.precioMxn || pieza?.precio || 0)}"></label>
+      <label>Moneda<select name="moneda"><option value="MXN">MXN</option><option value="USD">USD</option></select></label>
+      <label class="wide">Observaciones<textarea name="observaciones" placeholder="Notas de estimacion, ruta critica o capacidad"></textarea></label>
+      <div class="wide split-actions">
+        <button>Guardar estimacion</button>
+        <button class="secondary" type="button" id="estimate-cancel">Cerrar</button>
+      </div>
+    </form>
+    ${table(["Fecha", "Descripcion", "Horas", "Costo", "Usuario", "Observaciones"], estimaciones.map(item => [
+      formatDateTime(item.createdAt),
+      escapeHtml(item.descripcion),
+      item.horasEstimadas,
+      item.moneda === "USD" ? formatUsd(item.costoEstimado) : formatMoney(item.costoEstimado),
+      escapeHtml(item.usuario || ""),
+      escapeHtml(item.observaciones || "")
+    ]))}`;
+  panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  document.querySelector("#estimate-cancel").addEventListener("click", () => {
+    panel.hidden = true;
+    panel.innerHTML = "";
+  });
+  document.querySelector("#estimate-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = normalize(formData(event.currentTarget));
+    await api(`/api/piezas/${piezaId}/estimaciones`, { method: "POST", body: JSON.stringify(data) });
+    await renderMonitor();
+  });
+}
+
+function estimateSuggestedHours(pieza) {
+  const cantidad = Number(pieza?.cantidad || 1);
+  return Math.max(1, cantidad).toFixed(2);
 }
 
 async function renderTiempos() {
@@ -1423,7 +1490,7 @@ async function renderRequisiciones() {
       <form class="requisition-form" id="req-form">
         <section class="requisition-entry">
           <label>ID Pieza<select name="piezaId" required>${cache.piezas.map(piezaRequisicionOption).join("")}</select></label>
-          <label>Destino<input name="destino" value="${GODMISA_INTERNAL_DESTINO}" required></label>
+          <label>Destino<input name="destino" value="${TORNOS_INTERNAL_DESTINO}" required></label>
           <label>Material<input name="material" list="req-material-options" placeholder="ACERO, NYLON"></label>
           <label>Medida<select name="unidadMedida">${MEDIDAS_REQUISICION.map(medida => `<option value="${medida}"${medida === "PIEZAS" ? " selected" : ""}>${medida}</option>`).join("")}</select></label>
           <label>Cantidad<input name="cantidad" type="number" step="0.001" value="1" min="0.001"></label>
@@ -1497,7 +1564,7 @@ async function renderRequisiciones() {
 }
 
 function piezaRequisicionOption(pieza) {
-  const cliente = pieza.clienteNombre || "GODMISA";
+  const cliente = pieza.clienteNombre || "Tornos SA de CV";
   const oc = pieza.ordenCompra ? `OC ${pieza.ordenCompra}` : "Sin OC";
   return `<option value="${pieza.id}">${escapeHtml(`${pieza.id} | ${cliente} | ${oc} | ${pieza.descripcion}`)}</option>`;
 }
@@ -1531,9 +1598,9 @@ function applyRequisitionDescriptionSelection(form) {
 function updateRequisitionDestination(form) {
   const pieza = cache.piezas.find(item => String(item.id) === String(form.piezaId.value));
   if (!pieza) return;
-  form.destino.value = Number(pieza.id) === GODMISA_INTERNAL_PIEZA_ID
-    ? GODMISA_INTERNAL_DESTINO
-    : (pieza.clienteNombre || form.destino.value || GODMISA_INTERNAL_DESTINO);
+  form.destino.value = Number(pieza.id) === TORNOS_INTERNAL_PIEZA_ID
+    ? TORNOS_INTERNAL_DESTINO
+    : (pieza.clienteNombre || form.destino.value || TORNOS_INTERNAL_DESTINO);
 }
 
 function appendCurrentRequisicionPartida(form) {
@@ -1776,7 +1843,7 @@ async function renderAlmacen() {
 async function renderRemisiones() {
   await loadReferenceData();
   const rows = await api("/api/remisiones");
-  const pendientes = cache.piezas.filter(p => !p.entregado && p.id !== GODMISA_INTERNAL_PIEZA_ID);
+  const pendientes = cache.piezas.filter(p => !p.entregado && p.id !== TORNOS_INTERNAL_PIEZA_ID);
   root.innerHTML = `
     <div class="grid-2">
       <form class="panel form-grid" id="rem-form">
@@ -1850,11 +1917,13 @@ function bindRemisionPickers(form, updateSummary) {
 
 async function renderReportes() {
   await loadReferenceData();
-  const [requisiciones, ordenesCompra, tiempos, remisiones] = await Promise.all([
+  const [requisiciones, ordenesCompra, tiempos, remisiones, estimaciones, facturas] = await Promise.all([
     api("/api/requisiciones"),
     api("/api/ordenes-compra"),
     api("/api/tiempos"),
-    api("/api/remisiones")
+    api("/api/remisiones"),
+    api("/api/estimaciones"),
+    api("/api/facturas")
   ]);
   root.innerHTML = `
     <section class="report-layout">
@@ -1870,6 +1939,7 @@ async function renderReportes() {
           <label>Cliente<select name="clienteId"><option value="">Todos</option>${options(cache.clientes, "id", "nombreCliente")}</select></label>
           <label>Operador<select name="operadorId"><option value="">Todos</option>${options(cache.operadores, "id", "nombreOperador")}</select></label>
           <label>Estatus<select name="estatusId"><option value="">Todos</option>${options(cache.estatus, "id", "descripcion")}</select></label>
+          <label>Excluir estatus<select name="excluirEstatusId"><option value="">Ninguno</option>${options(cache.estatus, "id", "descripcion")}</select></label>
           <label>Desde<input name="desde" type="date"></label>
           <label>Hasta<input name="hasta" type="date"></label>
           <div class="wide split-actions">
@@ -1881,11 +1951,12 @@ async function renderReportes() {
       </section>
     </section>`;
   const form = document.querySelector("#report-filter-form");
-  const context = { piezas: cache.piezas, requisiciones, ordenesCompra, tiempos, remisiones };
+  const context = { piezas: cache.piezas, requisiciones, ordenesCompra, tiempos, remisiones, estimaciones, facturas };
   const draw = () => {
     const filters = formData(form);
     document.querySelector("#report-output").innerHTML = renderReportContent(selectedReportId, context, filters);
     updateReportSelection();
+    bindReportActions(context);
   };
   form.addEventListener("submit", event => {
     event.preventDefault();
@@ -1902,6 +1973,34 @@ async function renderReportes() {
     });
   });
   draw();
+}
+
+function bindReportActions(context) {
+  const facturaForm = document.querySelector("#factura-form");
+  if (facturaForm) {
+    const syncTotals = () => {
+      const selected = facturaForm.remisionId.selectedOptions[0];
+      const subtotal = Number(selected?.dataset.subtotal || 0);
+      const iva = Math.round((subtotal * 0.16 + Number.EPSILON) * 100) / 100;
+      facturaForm.subtotal.value = roundForInput(subtotal);
+      facturaForm.iva.value = roundForInput(iva);
+      facturaForm.total.value = roundForInput(subtotal + iva);
+    };
+    facturaForm.remisionId.addEventListener("change", syncTotals);
+    facturaForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const data = normalize(formData(facturaForm));
+      await api("/api/facturas", { method: "POST", body: JSON.stringify(data) });
+      await navigate("reportes");
+    });
+    syncTotals();
+  }
+  document.querySelectorAll(".factura-pdf-button").forEach(button => {
+    button.addEventListener("click", async () => {
+      const blob = await api(`/api/facturas/${button.dataset.facturaId}/pdf`);
+      window.open(URL.createObjectURL(blob), "_blank", "noopener");
+    });
+  });
 }
 
 function reportOptionButton(option) {
@@ -1952,6 +2051,7 @@ function filteredReportData(context, filters) {
     .filter(pieza => filterPiezas([pieza], filters.q).length)
     .filter(pieza => !filters.clienteId || String(pieza.clienteId) === filters.clienteId)
     .filter(pieza => !filters.estatusId || String(pieza.estatusId) === filters.estatusId)
+    .filter(pieza => !filters.excluirEstatusId || String(pieza.estatusId) !== filters.excluirEstatusId)
     .filter(pieza => inDateRange(pieza.fechaCompromiso, filters.desde, filters.hasta));
   const tiempos = context.tiempos
     .filter(tiempo => reportMatches([
@@ -1975,6 +2075,11 @@ function filteredReportData(context, filters) {
       const pieza = piezaMap.get(String(remision.piezaId));
       return pieza && String(pieza.estatusId) === filters.estatusId;
     })
+    .filter(remision => {
+      if (!filters.excluirEstatusId) return true;
+      const pieza = piezaMap.get(String(remision.piezaId));
+      return !pieza || String(pieza.estatusId) !== filters.excluirEstatusId;
+    })
     .filter(remision => inDateRange(reportDate(remision.fecha), filters.desde, filters.hasta));
   const ordenesCompra = context.ordenesCompra
     .filter(orden => reportMatches([
@@ -1984,7 +2089,39 @@ function filteredReportData(context, filters) {
       ...(orden.detalles || []).flatMap(detalle => [detalle.requisicionFolio, detalle.descripcion, detalle.material, detalle.destino])
     ], filters.q))
     .filter(orden => inDateRange(reportDate(orden.fecha), filters.desde, filters.hasta));
-  return { piezas, requisiciones, ordenesCompra, tiempos, remisiones, piezaMap };
+  const estimaciones = (context.estimaciones || [])
+    .filter(estimacion => reportMatches([
+      estimacion.piezaId,
+      estimacion.clienteNombre,
+      estimacion.ordenCompra,
+      estimacion.descripcion,
+      estimacion.observaciones
+    ], filters.q))
+    .filter(estimacion => !filters.clienteId || String(estimacion.clienteId) === filters.clienteId)
+    .filter(estimacion => inDateRange(reportDate(estimacion.createdAt), filters.desde, filters.hasta));
+  const facturas = (context.facturas || [])
+    .filter(factura => reportMatches([
+      factura.folio,
+      factura.serie,
+      factura.clienteNombre,
+      factura.remisionFolio,
+      factura.estatus,
+      factura.uuid
+    ], filters.q))
+    .filter(factura => !filters.clienteId || String(factura.clienteId) === filters.clienteId)
+    .filter(factura => inDateRange(reportDate(factura.fecha), filters.desde, filters.hasta));
+  return {
+    piezas,
+    requisiciones,
+    ordenesCompra,
+    tiempos,
+    remisiones,
+    estimaciones,
+    facturas,
+    piezaMap,
+    allRemisiones: context.remisiones,
+    allFacturas: context.facturas
+  };
 }
 
 function renderDiarioOperador(option, data) {
@@ -2112,6 +2249,7 @@ function renderPiezasEntregadas(option, data) {
 }
 
 function renderEstimacionSemanal(option, data) {
+  const latestEstimate = latestEstimateByPiece(data.estimaciones);
   const rows = data.piezas
     .filter(pieza => !pieza.entregado)
     .map(pieza => ({ pieza, dias: daysUntil(pieza.fechaCompromiso) }))
@@ -2124,15 +2262,20 @@ function renderEstimacionSemanal(option, data) {
   ], `
     <section class="panel">
       <h3>Estimacion semanal</h3>
-      ${table(["Compromiso", "Dias", "Pieza", "Cliente", "Cantidad", "Estatus", "Descripcion"], rows.map(({ pieza, dias }) => [
+      ${table(["Compromiso", "Dias", "Pieza", "Cliente", "Cantidad", "Estatus", "Horas", "Costo", "Descripcion"], rows.map(({ pieza, dias }) => {
+        const estimacion = latestEstimate.get(String(pieza.id));
+        return [
         formatDateOnly(pieza.fechaCompromiso),
         dueBadge(dias),
         pieza.id,
         reportText(pieza.clienteNombre),
         pieza.cantidad,
         reportText(pieza.estatus),
+        estimacion?.horasEstimadas || "",
+        estimacion ? (estimacion.moneda === "USD" ? formatUsd(estimacion.costoEstimado) : formatMoney(estimacion.costoEstimado)) : "",
         reportText(pieza.descripcion)
-      ]))}
+      ];
+      }))}
     </section>`);
 }
 
@@ -2179,6 +2322,7 @@ function renderEstadisticas(option, data) {
 }
 
 function renderImpresionFactura(option, data) {
+  const invoicedRemisiones = new Set(data.facturas.map(factura => String(factura.remisionId)).filter(Boolean));
   const rows = data.remisiones
     .map(remision => {
       const pieza = data.piezaMap.get(String(remision.piezaId));
@@ -2193,28 +2337,83 @@ function renderImpresionFactura(option, data) {
   ], `
     <section class="panel">
       <h3>Impresion de factura</h3>
-      ${table(["Remision", "Fecha", "Cliente", "Pieza", "Cantidad", "Descripcion", "Formato"], rows.map(({ remision, pieza, cliente }) => [
+      ${table(["Remision", "Fecha", "Cliente", "Pieza", "Cantidad", "Descripcion", "Formato", "Estatus"], rows.map(({ remision, pieza, cliente }) => [
         reportText(remision.folio),
         formatDateTime(remision.fecha),
         reportText(remision.clienteNombre),
         remision.piezaId,
         remision.cantidadEntregada,
         reportText(pieza?.descripcion),
-        yesNo(cliente?.formatoFactura !== false)
+        yesNo(cliente?.formatoFactura !== false),
+        invoicedRemisiones.has(String(remision.id)) ? badge("Facturada", "ok") : badge("Pendiente", "warning")
       ]))}
     </section>`);
 }
 
 function renderFacturasGeneradas(option, data) {
   return reportFrame(option, [
-    metric("Facturas", 0),
+    metric("Facturas", data.facturas.length),
     metric("Remisiones base", data.remisiones.length),
-    metric("Ordenes compra", data.ordenesCompra.length)
+    metric("Total facturado", formatMoney(sumReport(data.facturas, factura => factura.total)))
   ], `
     <section class="panel">
+      <h3>Registrar factura</h3>
+      ${facturaForm(data)}
+    </section>
+    <section class="panel">
       <h3>Facturas generadas</h3>
-      ${table(["Factura", "Fecha", "Cliente", "Importe", "Estatus"], [])}
+      ${table(["Factura", "Fecha", "Cliente", "Remision", "Subtotal", "IVA", "Total", "Estatus", "PDF"], data.facturas.map(factura => [
+        reportText([factura.serie, factura.folio].filter(Boolean).join("-") || factura.folio),
+        formatDateTime(factura.fecha),
+        reportText(factura.clienteNombre),
+        reportText(factura.remisionFolio),
+        formatMoney(factura.subtotal),
+        formatMoney(factura.iva),
+        formatMoney(factura.total),
+        reportText(factura.estatus),
+        `<button class="secondary factura-pdf-button" data-factura-id="${factura.id}">PDF</button>`
+      ]))}
     </section>`);
+}
+
+function latestEstimateByPiece(estimaciones = []) {
+  const map = new Map();
+  estimaciones.forEach(estimacion => {
+    const key = String(estimacion.piezaId);
+    const current = map.get(key);
+    if (!current || String(estimacion.createdAt || "") > String(current.createdAt || "")) {
+      map.set(key, estimacion);
+    }
+  });
+  return map;
+}
+
+function facturaForm(data) {
+  const invoicedRemisiones = new Set((data.allFacturas || data.facturas).map(factura => String(factura.remisionId)).filter(Boolean));
+  const remisiones = (data.allRemisiones || data.remisiones).filter(remision => !invoicedRemisiones.has(String(remision.id)));
+  if (!remisiones.length) {
+    return `<div class="empty-state inline-empty">No hay remisiones pendientes de factura administrativa.</div>`;
+  }
+  return `
+    <form class="form-grid" id="factura-form">
+      <label>Remision<select name="remisionId" required>${remisiones.map(remision => facturaRemisionOption(remision, data.piezaMap)).join("")}</select></label>
+      <label>Serie<input name="serie" value="A"></label>
+      <label>Folio<input name="folio" required placeholder="Folio fiscal o administrativo"></label>
+      <label>Subtotal<input name="subtotal" type="number" step="0.01" min="0" value="0"></label>
+      <label>IVA<input name="iva" type="number" step="0.01" min="0" value="0"></label>
+      <label>Total<input name="total" type="number" step="0.01" min="0" value="0"></label>
+      <label>Estatus<select name="estatus"><option>Pendiente</option><option>Timbrada</option><option>Pagada</option><option>Cancelada</option></select></label>
+      <label>UUID<input name="uuid"></label>
+      <label class="wide">Observaciones<textarea name="observaciones"></textarea></label>
+      <button>Registrar factura</button>
+    </form>`;
+}
+
+function facturaRemisionOption(remision, piezaMap) {
+  const pieza = piezaMap.get(String(remision.piezaId));
+  const label = `${remision.folio} | ${remision.clienteNombre} | Pieza ${remision.piezaId} | ${pieza?.descripcion || ""}`;
+  const subtotal = Number(pieza?.precioMxn || pieza?.precio || 0) * Number(remision.cantidadEntregada || 0);
+  return `<option value="${remision.id}" data-subtotal="${roundForInput(subtotal)}">${escapeHtml(label)}</option>`;
 }
 
 function reportFrame(option, metrics, body) {
@@ -2308,28 +2507,36 @@ function reportText(value) {
 }
 
 function configureExportToolbar(viewName) {
-  if (views[viewName]?.exportable === false) {
+  const view = views[viewName] || {};
+  const canExport = view.exportable !== false;
+  const importConfig = importConfigFor(viewName);
+  if (!canExport && !importConfig) {
     actions.innerHTML = "";
     return;
   }
-  const importConfig = importConfigFor(viewName);
   actions.innerHTML = `
-    <button class="export-button" type="button" data-export="pdf" data-icon="down">PDF</button>
-    <button class="export-button" type="button" data-export="csv" data-icon="down">CSV</button>
-    <button class="export-button" type="button" data-import="csv" data-icon="up" ${importConfig ? "" : "disabled"}>Importar de CSV</button>
-    <input class="csv-import-input" type="file" accept=".csv,text/csv" hidden>
-    <span class="toolbar-status" role="status"></span>`;
-
-  actions.querySelector("[data-export='pdf']").addEventListener("click", exportCurrentViewPdf);
-  actions.querySelector("[data-export='csv']").addEventListener("click", exportCurrentViewCsv);
-
-  const importInput = actions.querySelector(".csv-import-input");
-  const importButton = actions.querySelector("[data-import='csv']");
-  importButton.addEventListener("click", () => importInput.click());
-  importInput.addEventListener("change", async event => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (file) await handleCsvImport(viewName, file);
+    <div class="split-actions toolbar-actions">
+      ${canExport ? `
+        <button class="secondary" type="button" id="toolbar-export-csv">CSV</button>
+        <button class="secondary" type="button" id="toolbar-export-pdf">PDF</button>
+        <button class="secondary" type="button" id="toolbar-print">Imprimir</button>
+      ` : ""}
+      ${importConfig ? `
+        <button class="secondary" type="button" id="toolbar-import">Importar CSV</button>
+        <input class="sr-only" id="toolbar-import-file" type="file" accept=".csv,text/csv">
+      ` : ""}
+      <span class="toolbar-status" role="status"></span>
+    </div>`;
+  document.querySelector("#toolbar-export-csv")?.addEventListener("click", exportCurrentViewCsv);
+  document.querySelector("#toolbar-export-pdf")?.addEventListener("click", exportCurrentViewPdf);
+  document.querySelector("#toolbar-print")?.addEventListener("click", printCurrentView);
+  const importButton = document.querySelector("#toolbar-import");
+  const importFile = document.querySelector("#toolbar-import-file");
+  importButton?.addEventListener("click", () => importFile?.click());
+  importFile?.addEventListener("change", () => {
+    const file = importFile.files?.[0];
+    if (file) void handleCsvImport(viewName, file);
+    importFile.value = "";
   });
 }
 
@@ -2450,6 +2657,18 @@ function exportCurrentViewCsv() {
 function exportCurrentViewPdf() {
   const pdfBytes = createSimplePdf(buildPdfExportLines());
   downloadBlob(new Blob([pdfBytes], { type: "application/pdf" }), `${safeFileName(currentModuleTitle())}.pdf`);
+}
+
+function printCurrentView() {
+  const popup = window.open("", "_blank");
+  if (!popup) {
+    setToolbarStatus("El navegador bloqueo la impresion", "error");
+    return;
+  }
+  popup.document.write(buildPrintableExportHtml());
+  popup.document.close();
+  popup.focus();
+  popup.print();
 }
 
 function buildPdfExportLines() {
@@ -2801,7 +3020,7 @@ function submitJson(url, after) {
 }
 
 function normalize(data) {
-  const numeric = new Set(["id", "clienteId", "proveedorId", "estatusId", "operadorId", "piezaId", "articuloId", "cantidad", "cantidadEntregada", "turno", "precio", "tipoCambioUsdMxn", "existencia", "minimo", "maximo", "puntoReorden", "precioUnitario", "retencionIvaPct", "retencionIsrPct"]);
+  const numeric = new Set(["id", "clienteId", "proveedorId", "estatusId", "operadorId", "piezaId", "articuloId", "remisionId", "cantidad", "cantidadEntregada", "turno", "precio", "tipoCambioUsdMxn", "existencia", "minimo", "maximo", "puntoReorden", "precioUnitario", "retencionIvaPct", "retencionIsrPct", "horasEstimadas", "costoEstimado", "subtotal", "iva", "total"]);
   const booleans = new Set(["activo", "supervisor", "chofer", "entregado", "formatoFactura"]);
   return Object.fromEntries(Object.entries(data).map(([key, value]) => {
     if (booleans.has(key)) return [key, value === "true"];
@@ -2878,6 +3097,10 @@ function formatExchangeRate(value) {
 
 function formatPercent(value) {
   return Number(value || 0).toLocaleString("es-MX", { maximumFractionDigits: 4 });
+}
+
+function roundForInput(value) {
+  return String(Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100);
 }
 
 function formatDateTime(value) {

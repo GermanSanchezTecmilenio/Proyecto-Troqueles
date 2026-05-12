@@ -6,7 +6,7 @@ ALTER TABLE requisicion_detalles
   ADD CONSTRAINT fk_req_det_pieza FOREIGN KEY (pieza_id) REFERENCES piezas (id);
 
 INSERT INTO clientes (id, nombre_cliente, calle, colonia, municipio, estado, rfc, cp, razon_social, formato_factura, activo)
-VALUES (2460, 'GODMISA (INTERNO)', 'GODMISA', 'GODMISA', 'GODMISA', 'NL', 'XAXX010101000', '00000', 'GODMISA SA DE CV', false, true);
+VALUES (2460, 'Tornos SA de CV (INTERNO)', 'Tornos SA de CV', 'Tornos SA de CV', 'Tornos SA de CV', 'NL', 'XAXX010101000', '00000', 'Tornos SA de CV', false, true);
 
 INSERT INTO piezas (
   id,
@@ -28,15 +28,15 @@ INSERT INTO piezas (
   2460,
   2460,
   1,
-  'GODMISA',
-  'GODMISA (ALMACEN, INGENIERIA O TALLER)',
+  'TORNOS SA DE CV',
+  'TORNOS SA DE CV (ALMACEN, INGENIERIA O TALLER)',
   1,
   0,
   CURRENT_DATE(),
   DATE_ADD(CURRENT_DATE(), INTERVAL 100 YEAR),
   false,
   '2460',
-  'GODMISA',
+  'TORNOS SA DE CV',
   0.00,
   'USO INTERNO',
   'NO APLICA'

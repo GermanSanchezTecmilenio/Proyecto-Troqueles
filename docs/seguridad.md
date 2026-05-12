@@ -1,6 +1,6 @@
 # Seguridad operativa
 
-Guia para operar el MVP sin exponer credenciales, sesiones o datos sensibles.
+Guia para operar el sistema sin exponer credenciales, sesiones o datos sensibles.
 
 ## Configuracion base
 

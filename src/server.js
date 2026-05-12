@@ -9,12 +9,14 @@ import multer from "multer";
 import mysql from "mysql2/promise";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, ".env") });
+const projectRoot = path.resolve(__dirname, "..");
+dotenv.config({ path: path.join(projectRoot, ".env") });
 
-const publicDir = path.join(__dirname, "public");
-const migrationsDir = path.join(__dirname, "db", "migrations");
-const uploadsDir = path.join(__dirname, "uploads", "dibujos");
-const GODMISA_INTERNAL_PIEZA_ID = 2460;
+const publicDir = path.join(projectRoot, "public");
+const migrationsDir = path.join(projectRoot, "db", "migrations");
+const uploadsDir = path.join(projectRoot, "uploads", "dibujos");
+const TORNOS_INTERNAL_PIEZA_ID = 2460;
+const DEFAULT_DB_NAME = "tornos_sa_cv";
 const IVA_RATE = 0.16;
 
 let pool;
@@ -57,7 +59,7 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(corsHeaders);
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads", express.static(path.join(projectRoot, "uploads")));
 app.use(express.static(publicDir));
 
 app.get("/api/health", (req, res) => res.json({ status: "UP", database: "mysql" }));
@@ -253,10 +255,19 @@ app.post("/api/piezas/dibujos", upload.single("archivo"), asyncHandler(async (re
   });
 }));
 
+app.get("/api/piezas/:id/pdf", asyncHandler(async (req, res) => {
+  const pieza = await getPieza(req.params.id);
+  const [notas, estimaciones] = await Promise.all([
+    listPiezaNotas(pieza.id),
+    listEstimaciones(pieza.id)
+  ]);
+  sendPdf(res, `pieza-${pieza.id}.pdf`, piezaDocumentLines(pieza, notas, estimaciones));
+}));
+
 app.put("/api/piezas/:id", asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const body = normalizePieza(req.body);
-  if (id === GODMISA_INTERNAL_PIEZA_ID) {
+  if (id === TORNOS_INTERNAL_PIEZA_ID) {
     body.entregado = false;
     body.cantidadEntregada = 0;
   }
@@ -278,7 +289,7 @@ app.put("/api/piezas/:id/estatus", asyncHandler(async (req, res) => {
   const estatus = await one("SELECT id, descripcion FROM estatus_produccion WHERE id = ?", [estatusId]);
   if (!estatus) throw httpError(404, "Estatus no encontrado");
   const pieza = await getPieza(id);
-  const delivered = id !== GODMISA_INTERNAL_PIEZA_ID && String(estatus.descripcion).toLowerCase() === "entregado";
+  const delivered = id !== TORNOS_INTERNAL_PIEZA_ID && String(estatus.descripcion).toLowerCase() === "entregado";
   await exec(
     "UPDATE piezas SET estatus_id = ?, entregado = ?, cantidad_entregada = CASE WHEN ? THEN cantidad ELSE cantidad_entregada END WHERE id = ?",
     [estatusId, delivered, delivered, id]
@@ -291,22 +302,43 @@ app.put("/api/piezas/:id/estatus", asyncHandler(async (req, res) => {
 }));
 
 app.get("/api/piezas/:id/notas", asyncHandler(async (req, res) => {
-  const rows = await all(
-    `SELECT n.id, n.pieza_id AS piezaId, n.estatus_id AS estatusId, e.descripcion AS estatus, n.nota, n.usuario,
-            DATE_FORMAT(n.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt
-       FROM pieza_notas n
-       LEFT JOIN estatus_produccion e ON e.id = n.estatus_id
-      WHERE n.pieza_id = ?
-      ORDER BY n.created_at DESC`,
-    [req.params.id]
-  );
-  res.json(rows);
+  await getPieza(req.params.id);
+  res.json(await listPiezaNotas(req.params.id));
 }));
 
 app.post("/api/piezas/:id/notas", asyncHandler(async (req, res) => {
   const pieza = await getPieza(req.params.id);
   const saved = await addPiezaNota(pieza.id, req.body.estatusId || pieza.estatusId, req.body.nota, req.user.username);
   res.status(201).json(saved);
+}));
+
+app.get("/api/piezas/:id/estimaciones", asyncHandler(async (req, res) => {
+  await getPieza(req.params.id);
+  res.json(await listEstimaciones(req.params.id));
+}));
+
+app.post("/api/piezas/:id/estimaciones", asyncHandler(async (req, res) => {
+  const pieza = await getPieza(req.params.id);
+  const result = await exec(
+    `INSERT INTO pieza_estimaciones
+      (pieza_id, descripcion, horas_estimadas, costo_estimado, moneda, observaciones, usuario)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      pieza.id,
+      required(req.body.descripcion || "Estimacion de produccion", "Descripcion requerida"),
+      num(req.body.horasEstimadas, 0),
+      num(req.body.costoEstimado, 0),
+      String(req.body.moneda || "MXN").toUpperCase() === "USD" ? "USD" : "MXN",
+      emptyToNull(req.body.observaciones),
+      req.user.username
+    ]
+  );
+  await audit(req.user.username, "PIEZA_ESTIMACION_CREADA", `Pieza ${pieza.id} estimacion ${result.insertId}`);
+  res.status(201).json((await listEstimaciones(pieza.id)).find(item => Number(item.id) === Number(result.insertId)));
+}));
+
+app.get("/api/estimaciones", asyncHandler(async (req, res) => {
+  res.json(await listEstimaciones());
 }));
 
 app.get("/api/ordenes-trabajo", asyncHandler(async (req, res) => {
@@ -347,16 +379,31 @@ app.post("/api/ordenes-trabajo", asyncHandler(async (req, res) => {
   }
 }));
 
+app.get("/api/ordenes-trabajo/:id/pdf", asyncHandler(async (req, res) => {
+  const orden = await getOrdenTrabajo(req.params.id);
+  const piezas = (await listPiezas()).filter(pieza => Number(pieza.ordenTrabajoId) === Number(orden.id));
+  sendPdf(res, `orden-trabajo-${orden.id}.pdf`, ordenTrabajoLines(orden, piezas));
+}));
+
 app.get("/api/monitor-produccion", asyncHandler(async (req, res) => {
   const rows = await all(
     `SELECT p.id AS piezaId, p.orden_trabajo_id AS ordenTrabajoId, c.nombre_cliente AS cliente, p.orden_compra AS ordenCompra,
             p.no_parte AS noParte, p.no_dibujo AS noDibujo, p.descripcion, p.cantidad, p.cantidad_entregada AS cantidadEntregada,
             DATE_FORMAT(p.fecha_compromiso, '%Y-%m-%d') AS fechaCompromiso, e.descripcion AS estatus,
             DATEDIFF(p.fecha_compromiso, CURRENT_DATE()) AS diasCompromiso, p.precio,
-            p.fecha_compromiso < CURRENT_DATE() AS vencida
+            p.fecha_compromiso < CURRENT_DATE() AS vencida,
+            est.horas_estimadas AS horasEstimadas, est.costo_estimado AS costoEstimado, est.moneda AS monedaEstimacion
        FROM piezas p
        JOIN clientes c ON c.id = p.cliente_id
        JOIN estatus_produccion e ON e.id = p.estatus_id
+       LEFT JOIN pieza_estimaciones est
+         ON est.id = (
+           SELECT pe.id
+             FROM pieza_estimaciones pe
+            WHERE pe.pieza_id = p.id
+            ORDER BY pe.created_at DESC, pe.id DESC
+            LIMIT 1
+         )
       WHERE p.entregado = FALSE
       ORDER BY p.fecha_compromiso ASC`
   );
@@ -459,14 +506,7 @@ app.post("/api/requisiciones", asyncHandler(async (req, res) => {
 app.get("/api/requisiciones/:folio/pdf", asyncHandler(async (req, res) => {
   const requisicion = (await listRequisiciones()).find(item => Number(item.folio) === Number(req.params.folio));
   if (!requisicion) throw httpError(404, "Requisicion no encontrada");
-  sendPdf(res, `requisicion-${requisicion.folio}.pdf`, [
-    `REQUISICION ${requisicion.folio}`,
-    `Solicitante: ${requisicion.solicitante}`,
-    `Prioridad: ${requisicion.prioridad}`,
-    `Fecha: ${requisicion.fecha}`,
-    "",
-    ...requisicion.detalles.map(d => `${d.cantidad} ${d.unidadMedida || ""} - ${d.descripcion} - ${d.destino || ""}`)
-  ]);
+  sendPdf(res, `requisicion-${requisicion.folio}.pdf`, requisicionLines(requisicion));
 }));
 
 app.get("/api/ordenes-compra", asyncHandler(async (req, res) => {
@@ -589,7 +629,7 @@ app.get("/api/remisiones", asyncHandler(async (req, res) => {
 app.post("/api/remisiones", asyncHandler(async (req, res) => {
   const piezaId = Number(req.body.piezaId);
   const cantidadEntregada = num(req.body.cantidadEntregada, 0);
-  if (piezaId === GODMISA_INTERNAL_PIEZA_ID) throw httpError(400, "La pieza 2460 es interna de GODMISA");
+  if (piezaId === TORNOS_INTERNAL_PIEZA_ID) throw httpError(400, "La pieza 2460 es interna de Tornos SA de CV");
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -618,17 +658,56 @@ app.post("/api/remisiones", asyncHandler(async (req, res) => {
 app.get("/api/remisiones/:id/pdf", asyncHandler(async (req, res) => {
   const remision = (await listRemisiones()).find(item => Number(item.id) === Number(req.params.id));
   if (!remision) throw httpError(404, "Remision no encontrada");
-  sendPdf(res, `${remision.folio}.pdf`, [
-    `REMISION ${remision.folio}`,
-    `Cliente: ${remision.clienteNombre}`,
-    `Pieza: ${remision.piezaId}`,
-    `Cantidad entregada: ${remision.cantidadEntregada}`,
-    `Fecha: ${remision.fecha}`,
-    `Chofer: ${remision.chofer || ""}`,
-    `Autorizacion: ${remision.autorizacion || ""}`,
-    "",
-    remision.observaciones || ""
+  const [pieza, notas] = await Promise.all([
+    getPieza(remision.piezaId),
+    listPiezaNotas(remision.piezaId)
   ]);
+  sendPdf(res, `${remision.folio}.pdf`, remisionLines(remision, pieza, notas));
+}));
+
+app.get("/api/facturas", asyncHandler(async (req, res) => {
+  res.json(await listFacturas());
+}));
+
+app.post("/api/facturas", asyncHandler(async (req, res) => {
+  const remisionId = req.body.remisionId ? Number(req.body.remisionId) : null;
+  const remision = remisionId ? (await listRemisiones()).find(item => Number(item.id) === remisionId) : null;
+  if (remisionId && !remision) throw httpError(404, "Remision no encontrada");
+  if (remisionId) {
+    const existing = await one("SELECT id FROM facturas WHERE remision_id = ? AND cancelado = FALSE", [remisionId]);
+    if (existing) throw httpError(409, "La remision ya tiene una factura activa registrada");
+  }
+  const clienteId = remision?.clienteId || Number(req.body.clienteId);
+  await getCliente(clienteId);
+  const subtotal = round2(num(req.body.subtotal, 0));
+  const iva = req.body.iva == null || req.body.iva === "" ? round2(subtotal * IVA_RATE) : round2(num(req.body.iva, 0));
+  const total = req.body.total == null || req.body.total === "" ? round2(subtotal + iva) : round2(num(req.body.total, 0));
+  const result = await exec(
+    `INSERT INTO facturas
+      (remision_id, cliente_id, serie, folio, fecha, subtotal, iva, total, estatus, uuid, observaciones, created_by, cancelado)
+     VALUES (?, ?, ?, ?, NOW(6), ?, ?, ?, ?, ?, ?, ?, FALSE)`,
+    [
+      remisionId,
+      clienteId,
+      emptyToNull(req.body.serie),
+      required(req.body.folio, "Folio de factura requerido"),
+      subtotal,
+      iva,
+      total,
+      emptyToNull(req.body.estatus) || "Pendiente",
+      emptyToNull(req.body.uuid),
+      emptyToNull(req.body.observaciones),
+      req.user.username
+    ]
+  );
+  await audit(req.user.username, "FACTURA_REGISTRADA", `Factura ${result.insertId}`);
+  res.status(201).json((await listFacturas()).find(item => Number(item.id) === Number(result.insertId)));
+}));
+
+app.get("/api/facturas/:id/pdf", asyncHandler(async (req, res) => {
+  const factura = (await listFacturas()).find(item => Number(item.id) === Number(req.params.id));
+  if (!factura) throw httpError(404, "Factura no encontrada");
+  sendPdf(res, `factura-${factura.folio}.pdf`, facturaLines(factura));
 }));
 
 app.use((req, res) => {
@@ -659,7 +738,7 @@ async function start() {
   await migrate();
   await bootstrapAdmin();
   app.listen(config.port, () => {
-    console.log(`zSistema Node escuchando en http://localhost:${config.port}`);
+    console.log(`Tornos SA de CV Node escuchando en http://localhost:${config.port}`);
   });
 }
 
@@ -670,8 +749,8 @@ function parseDbConfig() {
     return {
       host: url.hostname || "localhost",
       port: Number(url.port || 3306),
-      database: url.pathname.replace(/^\//, "") || "Godmisa",
-      user: process.env.DB_USER || url.username || "zsistema_app",
+      database: url.pathname.replace(/^\//, "") || DEFAULT_DB_NAME,
+      user: process.env.DB_USER || url.username || "tornos_app",
       password: process.env.DB_PASSWORD || url.password || "",
       charset: "utf8mb4",
       ssl: url.searchParams.get("useSSL") === "true" ? { rejectUnauthorized: false } : undefined
@@ -680,8 +759,8 @@ function parseDbConfig() {
   return {
     host: process.env.DB_HOST || "localhost",
     port: Number(process.env.DB_PORT || 3306),
-    database: process.env.DB_NAME || "Godmisa",
-    user: process.env.DB_USER || "zsistema_app",
+    database: process.env.DB_NAME || DEFAULT_DB_NAME,
+    user: process.env.DB_USER || "tornos_app",
     password: process.env.DB_PASSWORD || "",
     charset: "utf8mb4",
     ssl: String(process.env.DB_SSL || "false").toLowerCase() === "true" ? { rejectUnauthorized: false } : undefined
@@ -714,10 +793,15 @@ async function migrate() {
   ]);
   const applied = new Set(appliedRows.map(row => row.id));
   const flyway = new Set(flywayRows);
+  const appliedVersions = new Set([...applied, ...flyway].map(migrationVersion).filter(Boolean));
   const files = (await fs.readdir(migrationsDir)).filter(file => /^V\d+__.+\.sql$/i.test(file)).sort(versionSort);
 
   for (const file of files) {
     if (applied.has(file)) continue;
+    if (appliedVersions.has(migrationVersion(file))) {
+      await exec("INSERT IGNORE INTO schema_migrations (id) VALUES (?)", [file]);
+      continue;
+    }
     if (flyway.has(file)) {
       await exec("INSERT IGNORE INTO schema_migrations (id) VALUES (?)", [file]);
       continue;
@@ -848,6 +932,35 @@ async function addPiezaNota(piezaId, estatusId, nota, username) {
   );
 }
 
+async function listPiezaNotas(piezaId) {
+  return all(
+    `SELECT n.id, n.pieza_id AS piezaId, n.estatus_id AS estatusId, e.descripcion AS estatus, n.nota, n.usuario,
+            DATE_FORMAT(n.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt
+       FROM pieza_notas n
+       LEFT JOIN estatus_produccion e ON e.id = n.estatus_id
+      WHERE n.pieza_id = ?
+      ORDER BY n.created_at DESC`,
+    [piezaId]
+  );
+}
+
+async function listEstimaciones(piezaId = null) {
+  const rows = await all(
+    `SELECT pe.id, pe.pieza_id AS piezaId, pe.descripcion, pe.horas_estimadas AS horasEstimadas,
+            pe.costo_estimado AS costoEstimado, pe.moneda, pe.observaciones, pe.usuario,
+            DATE_FORMAT(pe.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
+            p.orden_compra AS ordenCompra, p.no_parte AS noParte, p.no_dibujo AS noDibujo,
+            p.descripcion AS piezaDescripcion, c.id AS clienteId, c.nombre_cliente AS clienteNombre
+       FROM pieza_estimaciones pe
+       JOIN piezas p ON p.id = pe.pieza_id
+       JOIN clientes c ON c.id = p.cliente_id
+      ${piezaId ? "WHERE pe.pieza_id = ?" : ""}
+      ORDER BY pe.created_at DESC`,
+    piezaId ? [piezaId] : []
+  );
+  return rows;
+}
+
 async function listOrdenesTrabajo() {
   const rows = await all(
     `SELECT ot.id, ot.cliente_id AS clienteId, c.nombre_cliente AS clienteNombre, ot.orden_compra AS ordenCompra,
@@ -862,6 +975,12 @@ async function listOrdenesTrabajo() {
       ORDER BY ot.fecha DESC`
   );
   return rows.map(row => ({ ...row, cancelado: Boolean(row.cancelado), piezaIds: row.piezaIds ? row.piezaIds.split(",").map(Number) : [] }));
+}
+
+async function getOrdenTrabajo(id) {
+  const orden = (await listOrdenesTrabajo()).find(row => Number(row.id) === Number(id));
+  if (!orden) throw httpError(404, "Orden de trabajo no encontrada");
+  return orden;
 }
 
 async function listRequisiciones() {
@@ -919,6 +1038,19 @@ async function listRemisiones() {
       ORDER BY r.fecha DESC`
   );
   return rows.map(row => ({ ...row, activo: Boolean(row.activo) }));
+}
+
+async function listFacturas() {
+  const rows = await all(
+    `SELECT f.id, f.remision_id AS remisionId, f.cliente_id AS clienteId, c.nombre_cliente AS clienteNombre,
+            r.folio AS remisionFolio, f.serie, f.folio, DATE_FORMAT(f.fecha, '%Y-%m-%dT%H:%i:%s') AS fecha,
+            f.subtotal, f.iva, f.total, f.estatus, f.uuid, f.observaciones, f.created_by AS createdBy, f.cancelado
+       FROM facturas f
+       JOIN clientes c ON c.id = f.cliente_id
+       LEFT JOIN remisiones r ON r.id = f.remision_id
+      ORDER BY f.fecha DESC`
+  );
+  return rows.map(row => ({ ...row, cancelado: Boolean(row.cancelado) }));
 }
 
 async function almacenMovimiento(req, tipo) {
@@ -1022,23 +1154,158 @@ function operadorParams(body) {
   ];
 }
 
+function requisicionLines(requisicion) {
+  return documentLines("REQUISICION DE MATERIAL", requisicion.folio, [
+    ["Datos generales", [
+      fieldLine("Solicitante", requisicion.solicitante),
+      fieldLine("Autorizado por", requisicion.autorizacion),
+      fieldLine("Prioridad", requisicion.prioridad),
+      fieldLine("Fecha", requisicion.fecha),
+      fieldLine("Usuario", requisicion.usuarioSolicitante)
+    ]],
+    ["Partidas", requisicion.detalles.map((detalle, index) =>
+      `${index + 1}. Pieza ${detalle.piezaId || "-"} | ${detalle.cantidad} ${detalle.unidadMedida || ""} | ${detalle.material || "-"} | ${detalle.descripcion} | Destino ${detalle.destino || "-"}`
+    )],
+    ["Observaciones", [requisicion.observaciones || "Sin observaciones"]],
+    ["Firmas", ["Solicito: ____________________", "Autorizo: ____________________"]]
+  ]);
+}
+
 function ordenCompraLines(orden) {
-  return [
-    `ORDEN DE COMPRA ${orden.folio}`,
-    `Proveedor: ${orden.proveedorNombre}`,
-    `RFC: ${orden.proveedorRfc || ""}`,
-    `Fecha: ${orden.fecha}`,
-    `Moneda: ${orden.moneda}`,
-    "",
-    ...orden.detalles.map(d => `${d.cantidad} ${d.unidadMedida || ""} - ${d.descripcion} - ${money(d.precioUnitario)} = ${money(d.subtotal)}`),
-    "",
-    `Subtotal: ${money(orden.subtotal)}`,
-    `IVA: ${money(orden.iva)}`,
-    `Retenciones: ${money(Number(orden.retencionIva || 0) + Number(orden.retencionIsr || 0))}`,
-    `Total: ${money(orden.total)}`,
-    "",
-    orden.observaciones || ""
+  return documentLines("ORDEN DE COMPRA", orden.folio, [
+    ["Datos del proveedor", [
+      fieldLine("Proveedor", orden.proveedorNombre),
+      fieldLine("RFC", orden.proveedorRfc),
+      fieldLine("Contacto", orden.proveedorContacto),
+      fieldLine("Fecha", orden.fecha),
+      fieldLine("Moneda", orden.moneda)
+    ]],
+    ["Partidas", orden.detalles.map((d, index) =>
+      `${index + 1}. Req ${d.requisicionFolio || "-"} | ${d.cantidad} ${d.unidadMedida || ""} | ${d.descripcion} | ${money(d.precioUnitario)} | ${money(d.subtotal)}`
+    )],
+    ["Totales", [
+      fieldLine("Subtotal", money(orden.subtotal)),
+      fieldLine("IVA", money(orden.iva)),
+      fieldLine("Retenciones", money(Number(orden.retencionIva || 0) + Number(orden.retencionIsr || 0))),
+      fieldLine("Total", money(orden.total))
+    ]],
+    ["Observaciones", [orden.observaciones || "Sin observaciones"]]
+  ]);
+}
+
+function ordenTrabajoLines(orden, piezas) {
+  return documentLines("ORDEN DE TRABAJO", orden.id, [
+    ["Datos generales", [
+      fieldLine("Cliente", orden.clienteNombre),
+      fieldLine("Orden de compra", orden.ordenCompra),
+      fieldLine("Fecha", orden.fecha),
+      fieldLine("Fecha compromiso", orden.fechaCompromiso),
+      fieldLine("Elaboro", orden.createdBy)
+    ]],
+    ["Piezas", piezas.map((pieza, index) =>
+      `${index + 1}. ID ${pieza.id} | ${pieza.cantidad} pza | ${pieza.noParte || "Sin no. parte"} | ${pieza.noDibujo || "Sin dibujo"} | ${pieza.descripcion}`
+    )],
+    ["Observaciones", [orden.observaciones || "Sin observaciones"]],
+    ["Firmas", ["Elaboro: ____________________", "Recibio produccion: ____________________"]]
+  ]);
+}
+
+function piezaDocumentLines(pieza, notas, estimaciones) {
+  return documentLines("FICHA DE PIEZA", pieza.id, [
+    ["Datos de pieza", [
+      fieldLine("Cliente", pieza.clienteNombre),
+      fieldLine("Orden de compra", pieza.ordenCompra),
+      fieldLine("Orden de trabajo", pieza.ordenTrabajoId || "Sin OT"),
+      fieldLine("No. parte", pieza.noParte),
+      fieldLine("No. dibujo", pieza.noDibujo),
+      fieldLine("Descripcion", pieza.descripcion),
+      fieldLine("Cantidad", pieza.cantidad),
+      fieldLine("Entregada", pieza.cantidadEntregada),
+      fieldLine("Estatus", pieza.estatus),
+      fieldLine("Compromiso", pieza.fechaCompromiso),
+      fieldLine("Material", pieza.material),
+      fieldLine("Tratamiento", pieza.tratamiento),
+      fieldLine("Archivo", pieza.archivo)
+    ]],
+    ["Estimaciones", estimaciones.length
+      ? estimaciones.slice(0, 5).map(item => `${item.createdAt} | ${item.horasEstimadas} h | ${money(item.costoEstimado)} ${item.moneda} | ${item.descripcion}`)
+      : ["Sin estimaciones registradas"]],
+    ["Notas y estatus", notas.length
+      ? notas.slice(0, 8).map(nota => `${nota.createdAt} | ${nota.estatus || "Sin estatus"} | ${nota.usuario}: ${nota.nota}`)
+      : ["Sin notas registradas"]]
+  ]);
+}
+
+function remisionLines(remision, pieza, notas) {
+  return documentLines("REMISION", remision.folio, [
+    ["Datos de entrega", [
+      fieldLine("Cliente", remision.clienteNombre),
+      fieldLine("Fecha", remision.fecha),
+      fieldLine("Pieza", remision.piezaId),
+      fieldLine("Cantidad entregada", remision.cantidadEntregada),
+      fieldLine("Chofer", remision.chofer),
+      fieldLine("Autorizacion", remision.autorizacion)
+    ]],
+    ["Datos tecnicos", [
+      fieldLine("Orden de compra", pieza.ordenCompra),
+      fieldLine("Orden de trabajo", pieza.ordenTrabajoId || "Sin OT"),
+      fieldLine("No. parte", pieza.noParte),
+      fieldLine("No. dibujo", pieza.noDibujo),
+      fieldLine("Descripcion", pieza.descripcion),
+      fieldLine("Material", pieza.material),
+      fieldLine("Tratamiento", pieza.tratamiento),
+      fieldLine("Archivo", pieza.archivo)
+    ]],
+    ["Notas recientes", notas.length
+      ? notas.slice(0, 5).map(nota => `${nota.createdAt} | ${nota.estatus || "Sin estatus"} | ${nota.nota}`)
+      : ["Sin notas registradas"]],
+    ["Observaciones", [remision.observaciones || "Sin observaciones"]],
+    ["Firmas", ["Entrego: ____________________", "Recibio: ____________________"]]
+  ]);
+}
+
+function facturaLines(factura) {
+  return documentLines("FACTURA ADMINISTRATIVA", factura.folio, [
+    ["Datos generales", [
+      fieldLine("Serie", factura.serie),
+      fieldLine("Cliente", factura.clienteNombre),
+      fieldLine("Remision", factura.remisionFolio),
+      fieldLine("Fecha", factura.fecha),
+      fieldLine("Estatus", factura.estatus),
+      fieldLine("UUID", factura.uuid)
+    ]],
+    ["Totales", [
+      fieldLine("Subtotal", money(factura.subtotal)),
+      fieldLine("IVA", money(factura.iva)),
+      fieldLine("Total", money(factura.total))
+    ]],
+    ["Observaciones", [factura.observaciones || "Sin observaciones"]]
+  ]);
+}
+
+function documentLines(title, folio, sections) {
+  const lines = [
+    "TORNOS SA DE CV",
+    title,
+    `Folio: ${folio}`,
+    `Generado: ${new Date().toLocaleString("es-MX")}`,
+    dividerLine()
   ];
+  for (const [sectionTitle, sectionLines] of sections) {
+    lines.push(sectionTitle.toUpperCase());
+    const cleanLines = sectionLines.filter(line => line != null && String(line).trim() !== "");
+    lines.push(...(cleanLines.length ? cleanLines : ["Sin datos"]));
+    lines.push(dividerLine());
+  }
+  return lines;
+}
+
+function fieldLine(label, value) {
+  return `${label}: ${value == null || value === "" ? "-" : value}`;
+}
+
+function dividerLine() {
+  return "------------------------------------------------------------";
 }
 
 function sendPdf(res, filename, lines) {
@@ -1049,20 +1316,32 @@ function sendPdf(res, filename, lines) {
 
 function simplePdf(lines) {
   const safeLines = lines.flatMap(line => wrapAscii(line, 92));
-  const stream = [
-    "BT",
-    "/F1 10 Tf",
-    "48 760 Td",
-    ...safeLines.map((line, index) => `${index ? "0 -16 Td " : ""}(${escapePdf(line)}) Tj`),
-    "ET"
-  ].join("\n");
+  const pageSize = 43;
+  const pages = [];
+  for (let index = 0; index < Math.max(safeLines.length, 1); index += pageSize) {
+    pages.push(safeLines.slice(index, index + pageSize));
+  }
+  const pageObjectNumbers = pages.map((_, index) => 3 + index);
+  const fontObjectNumber = 3 + pages.length;
+  const firstContentObjectNumber = fontObjectNumber + 1;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    `<< /Length ${Buffer.byteLength(stream)} >> stream\n${stream}\nendstream`
+    `<< /Type /Pages /Kids [${pageObjectNumbers.map(number => `${number} 0 R`).join(" ")}] /Count ${pages.length} >>`
   ];
+  pages.forEach((_, index) => {
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontObjectNumber} 0 R >> >> /Contents ${firstContentObjectNumber + index} 0 R >>`);
+  });
+  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  pages.forEach(pageLines => {
+    const stream = [
+      "BT",
+      "/F1 10 Tf",
+      "48 760 Td",
+      ...pageLines.map((line, index) => `${index ? "0 -16 Td " : ""}(${escapePdf(line)}) Tj`),
+      "ET"
+    ].join("\n");
+    objects.push(`<< /Length ${Buffer.byteLength(stream)} >> stream\n${stream}\nendstream`);
+  });
   let body = "%PDF-1.4\n";
   const offsets = [];
   for (let index = 0; index < objects.length; index++) {
@@ -1206,6 +1485,10 @@ function versionSort(a, b) {
   const left = Number(a.match(/^V(\d+)/i)?.[1] || 0);
   const right = Number(b.match(/^V(\d+)/i)?.[1] || 0);
   return left - right || a.localeCompare(b);
+}
+
+function migrationVersion(file) {
+  return file.match(/^V(\d+)__/i)?.[1] || null;
 }
 
 function parseSize(value) {

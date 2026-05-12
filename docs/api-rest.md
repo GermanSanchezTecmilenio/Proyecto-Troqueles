@@ -1,4 +1,4 @@
-# APIs REST del MVP
+# APIs REST
 
 Documento de referencia rapida para las rutas expuestas por el backend.
 
@@ -6,7 +6,6 @@ Documento de referencia rapida para las rutas expuestas por el backend.
 
 - Todas las rutas bajo `/api/**` requieren `Authorization: Bearer <token>`, excepto `POST /api/auth/login`.
 - Las respuestas y peticiones operativas usan JSON, salvo descargas PDF/RTF.
-- Las rutas reflejan el alcance actual del MVP; las reglas finales de autorizacion y calculo fiscal siguen sujetas a validacion.
 
 ## Salud
 
@@ -45,12 +44,17 @@ Documento de referencia rapida para las rutas expuestas por el backend.
 | `GET` | `/api/piezas` | Lista piezas. |
 | `POST` | `/api/piezas` | Registra pieza. |
 | `POST` | `/api/piezas/dibujos` | Sube o registra dibujo asociado a pieza. |
+| `GET` | `/api/piezas/{id}/pdf` | Descarga ficha PDF de pieza. |
 | `PUT` | `/api/piezas/{id}` | Actualiza pieza. |
 | `PUT` | `/api/piezas/{id}/estatus` | Cambia estatus de pieza. |
 | `GET` | `/api/piezas/{id}/notas` | Lista notas de pieza. |
 | `POST` | `/api/piezas/{id}/notas` | Agrega nota a pieza. |
+| `GET` | `/api/piezas/{id}/estimaciones` | Lista estimaciones de pieza. |
+| `POST` | `/api/piezas/{id}/estimaciones` | Registra estimacion de pieza. |
+| `GET` | `/api/estimaciones` | Lista estimaciones consolidadas. |
 | `GET` | `/api/ordenes-trabajo` | Lista ordenes de trabajo. |
 | `POST` | `/api/ordenes-trabajo` | Crea orden de trabajo. |
+| `GET` | `/api/ordenes-trabajo/{id}/pdf` | Descarga orden de trabajo en PDF. |
 | `GET` | `/api/monitor-produccion` | Consulta monitor operativo. |
 | `GET` | `/api/tiempos` | Lista tiempos capturados. |
 | `POST` | `/api/tiempos` | Captura inicio/fin de operacion. |
@@ -86,3 +90,11 @@ Documento de referencia rapida para las rutas expuestas por el backend.
 | `GET` | `/api/remisiones` | Lista remisiones. |
 | `POST` | `/api/remisiones` | Crea remision. |
 | `GET` | `/api/remisiones/{id}/pdf` | Descarga remision en PDF. |
+
+## Facturacion
+
+| Metodo | Ruta | Uso |
+|---|---|---|
+| `GET` | `/api/facturas` | Lista facturas administrativas. |
+| `POST` | `/api/facturas` | Registra factura administrativa. |
+| `GET` | `/api/facturas/{id}/pdf` | Descarga factura administrativa en PDF. |

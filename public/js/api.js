@@ -1,5 +1,5 @@
-const TOKEN_KEY = "zsistema_token";
-const API_BASE_URL = (window.ZSISTEMA_API_BASE_URL || "").replace(/\/$/, "");
+const TOKEN_KEY = "tornos_token";
+const API_BASE_URL = (window.TORNOS_API_BASE_URL || window.ZSISTEMA_API_BASE_URL || "").replace(/\/$/, "");
 const IS_NETLIFY_STATIC_SITE = location.hostname.endsWith(".netlify.app");
 
 export function getToken() {
@@ -24,7 +24,7 @@ export function clearToken() {
 
 export async function api(path, options = {}) {
   if (!API_BASE_URL && IS_NETLIFY_STATIC_SITE && path.startsWith("/api/")) {
-    throw new Error("API no configurada. En Netlify define ZSISTEMA_API_BASE_URL con la URL del backend Node/MySQL.");
+    throw new Error("API no configurada. En Netlify define TORNOS_API_BASE_URL con la URL del backend Node/MySQL.");
   }
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");

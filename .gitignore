@@ -11,12 +11,7 @@ uploads/
 .vscode/
 *.iml
 
-# Generated video review artifacts
-video_frames/
-video_review_*/
-
-# Heavy legacy reference videos kept outside source control
-docs/referencias/videos-operaciones/
+# Generated documents and helper caches
 docs/**/*.docx
 docs/**/*.pptx
 docs/tools/__pycache__/

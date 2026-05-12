@@ -1,13 +1,13 @@
 {
-  "name": "zsistema-modern-prototype",
+  "name": "tornos-sa-cv",
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "zSistema modern prototype migrated to Node.js, Express and MySQL.",
+  "description": "Sistema operativo Tornos SA de CV migrado a Node.js, Express y MySQL.",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "check": "node --check server.js"
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

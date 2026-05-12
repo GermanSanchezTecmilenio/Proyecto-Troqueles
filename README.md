@@ -1,6 +1,6 @@
-# zSistema Modern Prototype
+# Tornos SA de CV
 
-Sistema web/API para modernizar los flujos operativos de **Tornos SA de CV / zSistema**: catalogos, produccion, compras, almacen, remisiones, reportes, seguridad y auditoria.
+Sistema web/API para los flujos operativos de **Tornos SA de CV**: catalogos, produccion, compras, almacen, remisiones, reportes, seguridad y auditoria.
 
 La version actual esta migrada a **Node.js + Express + MySQL**. No existe modo demo ni base en memoria; todos los datos operativos viven en MySQL.
 
@@ -32,13 +32,14 @@ La version actual esta migrada a **Node.js + Express + MySQL**. No existe modo d
 
 ```text
 .
-|-- server.js          API REST, autenticacion, migraciones y servidor web
+|-- src/
+|   `-- server.js      API REST, autenticacion, migraciones y servidor web
 |-- public/            Frontend estatico
 |   |-- index.html
 |   |-- styles.css
 |   `-- js/
 |-- db/
-|   `-- migrations/    Migraciones MySQL V1..V9
+|   `-- migrations/    Migraciones SQL versionadas; debe permanecer en raiz
 |-- docs/              Documentacion tecnica y funcional en Markdown
 |-- package.json       Scripts y dependencias Node
 |-- package-lock.json  Versiones bloqueadas de dependencias
@@ -60,7 +61,7 @@ npm install
 ```properties
 SERVER_PORT=8080
 
-DB_URL=jdbc:mysql://localhost:3306/Godmisa?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Mexico_City
+DB_URL=jdbc:mysql://localhost:3306/tornos_sa_cv?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Mexico_City
 DB_USER=root
 DB_PASSWORD=1234
 
@@ -107,7 +108,7 @@ Arranca una vez la aplicacion y despues regresa el valor a `false`.
 |---|---|
 | `npm start` | Arranca el sistema en `SERVER_PORT`. |
 | `npm run dev` | Arranca con `node --watch`. |
-| `npm run check` | Revisa sintaxis de `server.js`. |
+| `npm run check` | Revisa sintaxis de `src/server.js`. |
 | `npm audit` | Revisa vulnerabilidades npm. |
 
 ## Prueba Rapida de APIs
@@ -157,9 +158,11 @@ Invoke-RestMethod "http://localhost:8080/api/requisiciones" -Headers $headers
 Invoke-RestMethod "http://localhost:8080/api/requisiciones/material-opciones" -Headers $headers
 Invoke-RestMethod "http://localhost:8080/api/ordenes-compra" -Headers $headers
 Invoke-RestMethod "http://localhost:8080/api/ordenes-trabajo" -Headers $headers
+Invoke-RestMethod "http://localhost:8080/api/estimaciones" -Headers $headers
 Invoke-RestMethod "http://localhost:8080/api/almacen/articulos" -Headers $headers
 Invoke-RestMethod "http://localhost:8080/api/almacen/kardex" -Headers $headers
 Invoke-RestMethod "http://localhost:8080/api/remisiones" -Headers $headers
+Invoke-RestMethod "http://localhost:8080/api/facturas" -Headers $headers
 ```
 
 ## Publicacion en Netlify
@@ -172,7 +175,7 @@ Para Netlify se agrego:
 |---|---|
 | `netlify.toml` | Indica que Netlify publique `public/` y redirija rutas al `index.html`. |
 | `scripts/write-netlify-config.mjs` | Genera `public/config.js` con la URL del backend. |
-| `public/config.js` | Archivo generado durante build; define `window.ZSISTEMA_API_BASE_URL`. |
+| `public/config.js` | Archivo generado durante build; define `window.TORNOS_API_BASE_URL`. |
 
 Configuracion recomendada en Netlify:
 
@@ -180,9 +183,11 @@ Configuracion recomendada en Netlify:
 |---|---|
 | Build command | `node scripts/write-netlify-config.mjs` |
 | Publish directory | `public` |
-| Environment variable | `ZSISTEMA_API_BASE_URL=https://URL-DE-TU-BACKEND` |
+| Environment variable | `TORNOS_API_BASE_URL=https://URL-DE-TU-BACKEND` |
 
-El backend debe hospedarse aparte en un servicio que soporte Node.js persistente y MySQL, por ejemplo Render, Railway, Azure App Service, Azure Container Apps o un VPS. Si no defines `ZSISTEMA_API_BASE_URL`, el frontend intentara llamar `/api/**` en el mismo dominio de Netlify y el login no funcionara.
+El backend debe hospedarse aparte en un servicio que soporte Node.js persistente y MySQL, por ejemplo Render, Railway, Azure App Service, Azure Container Apps o un VPS. Si no defines `TORNOS_API_BASE_URL`, el frontend intentara llamar `/api/**` en el mismo dominio de Netlify y el login no funcionara.
+
+Si el despliegue muestra el mensaje antiguo `ZSISTEMA_API_BASE_URL`, vuelve a desplegar Netlify con la rama actual. El build tambien acepta `ZSISTEMA_API_BASE_URL` como alias para compatibilidad.
 
 ## Endpoints Principales
 
@@ -197,8 +202,12 @@ El backend debe hospedarse aparte en un servicio que soporte Node.js persistente
 | Catalogos | `GET/POST` | `/api/operadores` | Listar/crear operadores. |
 | Produccion | `GET/POST` | `/api/piezas` | Listar/crear piezas. |
 | Produccion | `POST` | `/api/piezas/dibujos` | Subir dibujo/archivo. |
+| Produccion | `GET` | `/api/piezas/{id}/pdf` | Ficha PDF de pieza con notas y estimaciones. |
 | Produccion | `PUT` | `/api/piezas/{id}/estatus` | Cambiar estatus y agregar nota. |
+| Produccion | `GET/POST` | `/api/piezas/{id}/estimaciones` | Consultar/capturar estimaciones del monitor. |
+| Produccion | `GET` | `/api/estimaciones` | Consolidado de estimaciones para reportes. |
 | Produccion | `GET/POST` | `/api/ordenes-trabajo` | Listar/crear OT. |
+| Produccion | `GET` | `/api/ordenes-trabajo/{id}/pdf` | Documento PDF de OT. |
 | Produccion | `GET` | `/api/monitor-produccion` | Monitor operativo. |
 | Produccion | `GET/POST` | `/api/tiempos` | Consultar/capturar tiempos. |
 | Compras | `GET/POST` | `/api/requisiciones` | Listar/crear requisiciones. |
@@ -207,6 +216,9 @@ El backend debe hospedarse aparte en un servicio que soporte Node.js persistente
 | Almacen | `POST` | `/api/almacen/entradas` | Entrada de inventario. |
 | Almacen | `POST` | `/api/almacen/salidas` | Salida de inventario. |
 | Remisiones | `GET/POST` | `/api/remisiones` | Listar/crear remisiones. |
+| Remisiones | `GET` | `/api/remisiones/{id}/pdf` | Documento PDF de remision. |
+| Facturacion | `GET/POST` | `/api/facturas` | Control administrativo de facturas. |
+| Facturacion | `GET` | `/api/facturas/{id}/pdf` | Documento PDF de factura administrativa. |
 
 ## Seguridad Integrada
 
@@ -222,19 +234,21 @@ El backend debe hospedarse aparte en un servicio que soporte Node.js persistente
 
 ## Base de Datos y Migraciones
 
-Al iniciar, `server.js`:
+Al iniciar, `src/server.js`:
 
 1. Lee `.env`.
 2. Conecta a MySQL.
-3. Crea la base `Godmisa` si el usuario tiene permisos.
+3. Crea la base `tornos_sa_cv` si el usuario tiene permisos.
 4. Crea `schema_migrations` si no existe.
 5. Ejecuta migraciones pendientes desde `db/migrations`.
 6. Crea o actualiza el usuario administrador inicial.
 
+La carpeta `db/` si debe estar en el proyecto porque contiene migraciones SQL. No contiene datos productivos ni archivos fisicos de MySQL; la base real vive en el servidor MySQL configurado en `.env`.
+
 No modificar migraciones ya aplicadas. Para cambios nuevos, agregar un archivo con el siguiente numero:
 
 ```text
-db/migrations/V10__descripcion_del_cambio.sql
+db/migrations/V12__descripcion_del_cambio.sql
 ```
 
 ## Solucion de Problemas
@@ -277,14 +291,23 @@ Solucion:
 3. En Netlify, configura la variable:
 
 ```text
-ZSISTEMA_API_BASE_URL=https://URL-DE-TU-BACKEND
+TORNOS_API_BASE_URL=https://URL-DE-TU-BACKEND
 ```
 
 4. Vuelve a desplegar en Netlify.
 
+### En Netlify aparece "API no configurada"
+
+Configura en Netlify:
+
+```text
+TORNOS_API_BASE_URL=https://URL-DE-TU-BACKEND
+```
+
+Despues ejecuta un redeploy. La URL debe apuntar al backend Node publicado, no a MySQL ni al sitio de Netlify.
+
 ## Documentacion Complementaria
 
 - [APIs REST](docs/api-rest.md)
-- [Modelo de datos inicial](docs/modelo-datos-inicial.md)
+- [Modelo de datos](docs/modelo-datos-inicial.md)
 - [Seguridad operativa](docs/seguridad.md)
-- [Pendientes de validacion](docs/pendientes-validacion.md)
