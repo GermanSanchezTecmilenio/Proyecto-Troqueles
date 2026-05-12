@@ -1,0 +1,56 @@
+const TOKEN_KEY = "zsistema_token";
+
+export function getToken() {
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  if (token) return token;
+  const legacyToken = localStorage.getItem(TOKEN_KEY);
+  if (legacyToken) {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+  return legacyToken;
+}
+
+export function setToken(token) {
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+export async function api(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("Accept", "application/json");
+  if (!(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+  const token = getToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const response = await fetch(path, { ...options, headers });
+  if (!response.ok) {
+    let message = `Error ${response.status}`;
+    try {
+      const body = await response.json();
+      message = body.message || message;
+    } catch {
+      // no-op
+    }
+    throw new Error(message);
+  }
+  if (response.status === 204) {
+    return null;
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  return response.blob();
+}
+
+export function formData(form) {
+  return Object.fromEntries(new FormData(form).entries());
+}

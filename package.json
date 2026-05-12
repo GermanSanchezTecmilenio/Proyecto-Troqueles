@@ -1,0 +1,19 @@
+{
+  "name": "zsistema-modern-prototype",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "zSistema modern prototype migrated to Node.js, Express and MySQL.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "mysql2": "^3.12.0"
+  }
+}

@@ -1,0 +1,6 @@
+ALTER TABLE piezas
+  ADD COLUMN moneda_precio VARCHAR(3) NOT NULL DEFAULT 'MXN' AFTER precio,
+  ADD COLUMN tipo_cambio_usd_mxn DECIMAL(14,4) NOT NULL DEFAULT 1 AFTER moneda_precio;
+
+ALTER TABLE piezas
+  MODIFY COLUMN archivo VARCHAR(500) NULL;

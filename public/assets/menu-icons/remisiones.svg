@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Remisiones">
+  <rect width="96" height="96" rx="18" fill="#eafbfd"/>
+  <rect x="14" y="39" width="40" height="23" rx="4" fill="#6ecdd7" stroke="#084d79" stroke-width="4"/>
+  <path d="M54 45h14l10 10v7H54z" fill="#167e8b" stroke="#084d79" stroke-width="4" stroke-linejoin="round"/>
+  <circle cx="29" cy="68" r="7" fill="#fff" stroke="#084d79" stroke-width="4"/>
+  <circle cx="68" cy="68" r="7" fill="#fff" stroke="#084d79" stroke-width="4"/>
+  <path d="M25 27h30v18H25z" fill="#fff" stroke="#084d79" stroke-width="3"/>
+  <path d="M31 35h18" stroke="#167e8b" stroke-width="3" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Almacen">
+  <rect width="96" height="96" rx="18" fill="#fff6e8"/>
+  <path d="M16 42l32-20 32 20v34H16z" fill="#f4c15d" stroke="#084d79" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M28 76V48h40v28" fill="#fff" stroke="#084d79" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M35 57h26M35 66h26" stroke="#c47a17" stroke-width="4" stroke-linecap="round"/>
+  <path d="M16 42h64" stroke="#084d79" stroke-width="4" stroke-linecap="round"/>
+</svg>

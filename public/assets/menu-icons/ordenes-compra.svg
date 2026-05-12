@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Ordenes de compra">
+  <rect width="96" height="96" rx="18" fill="#ffecec"/>
+  <rect x="20" y="20" width="42" height="56" rx="5" fill="#fff" stroke="#084d79" stroke-width="4"/>
+  <path d="M30 36h22M30 47h22M30 58h13" stroke="#a92d2d" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="68" cy="58" r="15" fill="#e77575" stroke="#084d79" stroke-width="4"/>
+  <path d="M68 48v20M60 55h11a5 5 0 0 1 0 10H60" stroke="#fff" stroke-width="4" stroke-linecap="round" fill="none"/>
+</svg>

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tornos SA de CV</title>
+  <link rel="stylesheet" href="/styles.css?v=20260508-reportes-opciones">
+</head>
+<body>
+  <section id="login-view" class="login-shell">
+    <form id="login-form" class="login-panel">
+      <div>
+        <p class="eyebrow">Prototipo moderno</p>
+        <h1>Tornos SA de CV</h1>
+        <p class="muted">Acceso administrativo-operativo</p>
+      </div>
+      <label>Usuario
+        <input name="username" autocomplete="username" required>
+      </label>
+      <label>Password
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit">Entrar</button>
+      <p id="login-error" class="error-message" role="alert"></p>
+    </form>
+  </section>
+
+  <section id="app-view" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand">
+        <button id="menu-home-button" class="brand-menu-button" type="button" aria-label="Abrir menu principal" title="Menu principal">
+          <span class="brand-menu-icon" aria-hidden="true"></span>
+        </button>
+        <strong>Tornos SA de CV</strong>
+        <span class="brand-user">Buen dia, <span id="current-user">Sesion</span></span>
+      </div>
+      <button id="nav-toggle" class="nav-toggle" type="button" aria-expanded="false" aria-controls="main-nav">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span class="sr-only">Menu</span>
+      </button>
+      <nav id="main-nav">
+        <button data-view="dashboard"><img class="nav-icon" src="/assets/menu-icons/dashboard.svg" alt="">Dashboard</button>
+        <button data-view="catalogosMenu"><img class="nav-icon" src="/assets/menu-icons/catalogos.svg" alt="">Catalogos</button>
+        <button data-view="produccionMenu"><img class="nav-icon" src="/assets/menu-icons/produccion.svg" alt="">Produccion</button>
+        <button data-view="comprasMenu"><img class="nav-icon" src="/assets/menu-icons/compras.svg" alt="">Compras</button>
+        <button data-view="almacen"><img class="nav-icon" src="/assets/menu-icons/almacen.svg" alt="">Almacen</button>
+        <button data-view="remisiones"><img class="nav-icon" src="/assets/menu-icons/remisiones.svg" alt="">Remisiones</button>
+        <button data-view="reportes"><img class="nav-icon" src="/assets/menu-icons/reportes.svg" alt="">Reportes</button>
+      </nav>
+      <button id="logout-button" class="ghost-button">Cerrar sesion</button>
+    </aside>
+    <main class="content">
+      <header class="content-header">
+        <div>
+          <p class="eyebrow" id="view-eyebrow">MVP</p>
+          <h2 id="view-title">Dashboard</h2>
+        </div>
+        <div id="view-actions" class="toolbar"></div>
+      </header>
+      <section id="view-root" class="view-root"></section>
+    </main>
+  </section>
+
+  <template id="loading-template">
+    <div class="state">Cargando...</div>
+  </template>
+
+  <script type="module" src="/js/app.js?v=20260508-reportes-opciones"></script>
+</body>
+</html>

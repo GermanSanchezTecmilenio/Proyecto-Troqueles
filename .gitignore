@@ -1,0 +1,22 @@
+# Build and runtime artifacts
+dist/
+node_modules/
+*.log
+logs/
+uploads/
+
+# Local environment and IDE files
+.env
+.idea/
+.vscode/
+*.iml
+
+# Generated video review artifacts
+video_frames/
+video_review_*/
+
+# Heavy legacy reference videos kept outside source control
+docs/referencias/videos-operaciones/
+docs/**/*.docx
+docs/**/*.pptx
+docs/tools/__pycache__/
