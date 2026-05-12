@@ -266,6 +266,22 @@ Get-Service | Where-Object { $_.Name -match "mysql" }
 
 Tambien confirma que `.env` tenga `DB_USER`, `DB_PASSWORD` y `DB_URL` correctos.
 
+### En Netlify aparece Error 404 al iniciar sesion
+
+Significa que el frontend esta publicado, pero no hay backend disponible en ese dominio. Netlify esta sirviendo `public/`, pero `/api/auth/login` no existe ahi.
+
+Solucion:
+
+1. Publica el backend Node/MySQL en otro servicio.
+2. Copia la URL publica del backend.
+3. En Netlify, configura la variable:
+
+```text
+ZSISTEMA_API_BASE_URL=https://URL-DE-TU-BACKEND
+```
+
+4. Vuelve a desplegar en Netlify.
+
 ## Documentacion Complementaria
 
 - [APIs REST](docs/api-rest.md)
