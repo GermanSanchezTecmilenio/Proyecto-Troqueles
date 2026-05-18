@@ -87,6 +87,16 @@ button.secondary:hover,
   border-color: var(--primary);
 }
 
+button.danger-button {
+  color: var(--danger);
+  border-color: #f0a5a0;
+}
+
+button.danger-button:hover {
+  background: #fff1f0;
+  border-color: var(--danger);
+}
+
 input, select, textarea {
   width: 100%;
   min-width: 0;
@@ -472,6 +482,51 @@ label {
   align-items: start;
 }
 
+.remission-workspace {
+  display: grid;
+  grid-template-columns: minmax(380px, .78fr) minmax(0, 1.22fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.remission-workspace > *,
+.remission-history-panel {
+  min-width: 0;
+}
+
+.remission-entry-panel,
+.remission-history-panel {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.remission-history-panel {
+  margin-top: 0;
+}
+
+.remission-pending-block {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.remission-entry-panel .panel-title-row,
+.remission-pending-block .panel-title-row {
+  justify-content: center;
+  text-align: center;
+}
+
+.remission-entry-panel .panel-title-row h3,
+.remission-pending-block .panel-title-row h3 {
+  width: 100%;
+  color: var(--primary-strong);
+  font-size: 1.25rem;
+  font-weight: 900;
+}
+
 .ot-workspace {
   display: grid;
   grid-template-columns: minmax(360px, .78fr) minmax(0, 1.22fr);
@@ -503,6 +558,209 @@ label {
   display: grid;
   gap: var(--space-3);
   min-width: 0;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(380px, .72fr) minmax(0, 1.28fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.settings-tabs {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #69b7e5;
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.settings-tabs button {
+  min-width: 108px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+  color: var(--primary-strong);
+  font-weight: 900;
+}
+
+.settings-tabs button:last-child {
+  border-right: 0;
+}
+
+.settings-tabs button:hover,
+.settings-tabs button.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.settings-block {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.settings-block .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
+}
+
+.settings-password-form {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.profile-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: .42rem;
+  padding: .45rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.profile-choice {
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: .45rem;
+  padding: .32rem .45rem;
+  color: var(--text);
+  font-size: .82rem;
+  font-weight: 800;
+  border-radius: 4px;
+  background: var(--surface-soft);
+}
+
+.profile-choice input {
+  width: 16px;
+  min-height: 16px;
+  flex: 0 0 auto;
+}
+
+.settings-block .table-wrap {
+  overflow: hidden;
+}
+
+.settings-block table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.settings-block th,
+.settings-block td {
+  padding: .52rem .6rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-block th:last-child,
+.settings-block td:last-child {
+  width: 150px;
+}
+
+.settings-cell-main {
+  min-width: 0;
+  display: grid;
+  gap: .18rem;
+}
+
+.settings-cell-main strong,
+.settings-cell-main span,
+.settings-mini {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-cell-main strong {
+  color: var(--primary-strong);
+}
+
+.settings-cell-main span,
+.settings-mini {
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.settings-mini {
+  margin-top: .22rem;
+}
+
+.settings-access-panel,
+.settings-access-panel form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.settings-access-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.settings-access-summary {
+  min-width: 0;
+  display: grid;
+  gap: .18rem;
+  padding: .55rem .65rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+}
+
+.settings-access-summary strong {
+  color: var(--primary-strong);
+}
+
+.settings-access-summary span {
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 800;
+}
+
+.settings-access-panel .table-wrap {
+  overflow: hidden;
+}
+
+.settings-access-panel table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.settings-access-panel th:not(:first-child),
+.settings-access-panel td:not(:first-child) {
+  width: 96px;
+  text-align: center;
+}
+
+.settings-access-panel th,
+.settings-access-panel td {
+  padding: .5rem .55rem;
+}
+
+.settings-access-menu strong {
+  color: var(--ok);
+}
+
+.access-check {
+  width: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.access-check input {
+  width: 17px;
+  min-height: 17px;
+}
+
+.settings-access-actions {
+  padding-top: .2rem;
 }
 
 .report-option-list {
@@ -1320,6 +1578,19 @@ label {
   padding: .28rem .55rem;
 }
 
+.settings-block .compact-actions {
+  align-items: stretch;
+  gap: .28rem;
+  flex-wrap: wrap;
+}
+
+.settings-block .compact-actions button {
+  flex: 1 1 62px;
+  min-width: 0;
+  padding-inline: .42rem;
+  white-space: normal;
+}
+
 .table-wrap {
   max-width: 100%;
   min-width: 0;
@@ -1363,6 +1634,45 @@ th {
   font-weight: 800;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.table-sort-link {
+  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.table-sort-link:hover {
+  background: transparent;
+  color: var(--primary-strong);
+}
+
+.table-sort-link::after {
+  content: "^v";
+  min-width: 1ch;
+  color: var(--primary);
+  font-size: .78rem;
+  text-decoration: none;
+  opacity: .65;
+}
+
+.table-sort-link[data-sort-direction="asc"]::after {
+  content: "^";
+  opacity: 1;
+}
+
+.table-sort-link[data-sort-direction="desc"]::after {
+  content: "v";
+  opacity: 1;
 }
 
 tbody tr:nth-child(odd) {
@@ -1592,7 +1902,9 @@ td button.secondary {
   }
 
   .grid-2,
+  .remission-workspace,
   .ot-workspace,
+  .settings-layout,
   .dashboard-shell,
   .dashboard-right {
     grid-template-columns: 1fr;
@@ -1734,6 +2046,8 @@ td button.secondary {
   .donut-layout,
   .grid-2,
   .ot-workspace,
+  .settings-layout,
+  .settings-access-toolbar,
   .grid-3,
   .module-grid,
   .report-layout,

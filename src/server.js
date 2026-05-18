@@ -2,11 +2,13 @@ import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 import express from "express";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import multer from "multer";
 import mysql from "mysql2/promise";
+import { ACCESS_ACTION_KEYS, ACCESS_CATALOG } from "./access-catalog.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -18,7 +20,21 @@ const uploadsDir = path.join(projectRoot, "uploads", "dibujos");
 const TORNOS_INTERNAL_PIEZA_ID = 2460;
 const DEFAULT_DB_NAME = "tornos_sa_cv";
 const IVA_RATE = 0.16;
-
+const IS_PRODUCTION = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+const UPLOAD_EXTENSIONS = new Set([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dxf", ".dwg"]);
+const UPLOAD_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/vnd.dwg",
+  "image/x-dwg",
+  "application/acad",
+  "application/x-acad",
+  "application/dxf",
+  "application/x-dxf",
+  "application/octet-stream"
+]);
 let pool;
 const sessions = new Map();
 
@@ -30,9 +46,14 @@ const config = {
   adminResetPassword: String(process.env.APP_BOOTSTRAP_ADMIN_RESET_PASSWORD || "false").toLowerCase() === "true",
   tokenTtlMinutes: Number(process.env.APP_TOKEN_TTL_MINUTES || 120),
   bcryptStrength: Number(process.env.APP_BCRYPT_STRENGTH || 12),
+  loginMaxFailedAttempts: Number(process.env.APP_LOGIN_MAX_FAILED_ATTEMPTS || 5),
+  loginRateLimitWindowMs: Number(process.env.APP_LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
+  loginRateLimitMax: Number(process.env.APP_LOGIN_RATE_LIMIT_MAX || 10),
   allowedOrigins: (process.env.APP_ALLOWED_ORIGINS || "").split(",").map(item => item.trim()).filter(Boolean),
   db: parseDbConfig()
 };
+
+const loginAttempts = new Map();
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -45,10 +66,22 @@ const upload = multer({
       }
     },
     filename: (req, file, cb) => {
-      const safeName = path.basename(file.originalname || "dibujo").replace(/[^A-Za-z0-9._-]/g, "_");
+      const extension = safeUploadExtension(file.originalname);
+      const baseName = path.basename(file.originalname || "dibujo", path.extname(file.originalname || ""))
+        .replace(/[^A-Za-z0-9._-]/g, "_")
+        .slice(0, 80);
+      const safeName = `${baseName || "dibujo"}${extension}`;
       cb(null, `${crypto.randomUUID()}_${safeName || "dibujo"}`);
     }
   }),
+  fileFilter: (req, file, cb) => {
+    const extension = safeUploadExtension(file.originalname);
+    const mimeType = String(file.mimetype || "").toLowerCase();
+    if (!extension || !UPLOAD_MIME_TYPES.has(mimeType)) {
+      return cb(httpError(400, "Tipo de archivo no permitido. Usa PDF, imagen o dibujo CAD."));
+    }
+    cb(null, true);
+  },
   limits: {
     fileSize: parseSize(process.env.APP_UPLOAD_MAX_FILE_SIZE || "25MB")
   }
@@ -56,10 +89,20 @@ const upload = multer({
 
 const app = express();
 app.disable("x-powered-by");
+app.use(securityHeaders);
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(corsHeaders);
-app.use("/uploads", express.static(path.join(projectRoot, "uploads")));
+app.use("/uploads", authRequired, requireAnyAccess(
+  { moduleId: "piezas", actionKey: "canView" },
+  { moduleId: "monitor", actionKey: "canView" },
+  { moduleId: "reportes", actionKey: "canView" }
+), express.static(path.join(projectRoot, "uploads"), {
+  setHeaders: (res, filePath) => {
+    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filePath).replace(/"/g, "")}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+  }
+}));
 app.use(express.static(publicDir));
 
 app.get("/api/health", (req, res) => res.json({ status: "UP", database: "mysql" }));
@@ -68,30 +111,52 @@ app.get("/actuator/health", (req, res) => res.json({ status: "UP" }));
 app.post("/api/auth/login", asyncHandler(async (req, res) => {
   const username = String(req.body.username || "").trim();
   const password = String(req.body.password || "");
+  assertLoginAllowed(req, username);
   const user = await one(
-    "SELECT u.id, u.username, u.password_hash AS passwordHash, u.display_name AS displayName, u.active FROM users u WHERE LOWER(u.username) = LOWER(?)",
+    `SELECT u.id, u.username, u.password_hash AS passwordHash, u.display_name AS displayName,
+            u.active, u.locked, u.failed_attempts AS failedAttempts
+       FROM users u
+      WHERE LOWER(u.username) = LOWER(?)`,
     [username]
   );
-  if (!user || !user.active || !(await bcrypt.compare(password, user.passwordHash))) {
+  if (!user || !user.active) {
+    recordFailedLogin(req, username);
     throw httpError(401, "Usuario o password incorrectos");
   }
+  if (user.locked) {
+    throw httpError(423, "Cuenta bloqueada. Solicita desbloqueo en Ajustes.");
+  }
+  if (!(await bcrypt.compare(password, user.passwordHash))) {
+    const attempts = Number(user.failedAttempts || 0) + 1;
+    const locked = attempts >= config.loginMaxFailedAttempts;
+    await exec("UPDATE users SET failed_attempts = ?, locked = ? WHERE id = ?", [attempts, locked, user.id]);
+    recordFailedLogin(req, username);
+    if (locked) await audit(user.username, "CUENTA_BLOQUEADA", "Intentos fallidos excedidos");
+    throw httpError(401, locked ? "Cuenta bloqueada por intentos fallidos" : "Usuario o password incorrectos");
+  }
   const roles = await userRoles(user.id);
+  const access = await accessForRoles(roles);
   const token = crypto.randomBytes(Number(process.env.APP_TOKEN_RANDOM_BYTES || 48)).toString("base64url");
   sessions.set(token, {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
     roles,
+    access,
     expiresAt: Date.now() + config.tokenTtlMinutes * 60 * 1000
   });
+  clearFailedLogin(req, username);
+  await exec("UPDATE users SET failed_attempts = 0, locked = FALSE, last_login_at = CURRENT_TIMESTAMP(6) WHERE id = ?", [user.id]);
   await audit(user.username, "LOGIN", "Sesion iniciada");
-  res.json({ token, id: user.id, username: user.username, displayName: user.displayName, roles });
+  res.json({ token, id: user.id, username: user.username, displayName: user.displayName, roles, access });
 }));
 
 app.use("/api", authRequired);
 
 app.get("/api/auth/me", asyncHandler(async (req, res) => {
-  res.json({ id: req.user.id, username: req.user.username, displayName: req.user.displayName, roles: req.user.roles });
+  const access = await userAccess(req.user.id);
+  req.user.access = access;
+  res.json({ id: req.user.id, username: req.user.username, displayName: req.user.displayName, roles: req.user.roles, access });
 }));
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
@@ -99,7 +164,238 @@ app.post("/api/auth/logout", asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
-app.get("/api/clientes", asyncHandler(async (req, res) => {
+app.get("/api/ajustes/perfiles", requireAccess("ajustes", "canView"), asyncHandler(async (req, res) => {
+  res.json(await listPerfilesUsuario());
+}));
+
+app.post("/api/ajustes/perfiles", requireAccess("ajustes", "canCreate"), asyncHandler(async (req, res) => {
+  const body = req.body;
+  const codigo = profileCode(body.codigo || body.nombre);
+  if (!codigo) throw httpError(400, "Codigo de perfil requerido");
+  const existing = await one("SELECT codigo FROM perfiles_usuario WHERE codigo = ?", [codigo]);
+  if (existing) throw httpError(409, "Ya existe un perfil con ese codigo");
+  await exec(
+    "INSERT INTO perfiles_usuario (codigo, nombre, descripcion, activo) VALUES (?, ?, ?, ?)",
+    [codigo, required(body.nombre, "Nombre de perfil requerido"), emptyToNull(body.descripcion), bool(body.activo, true)]
+  );
+  await insertDefaultProfileAccess(codigo);
+  await audit(req.user.username, "PERFIL_CREADO", `Perfil ${codigo}`);
+  res.status(201).json(await getPerfilUsuario(codigo));
+}));
+
+app.put("/api/ajustes/perfiles/:codigo", requireAccess("ajustes", "canUpdate"), asyncHandler(async (req, res) => {
+  const codigo = profileCode(req.params.codigo);
+  await getPerfilUsuario(codigo);
+  await exec(
+    "UPDATE perfiles_usuario SET nombre = ?, descripcion = ?, activo = ? WHERE codigo = ?",
+    [required(req.body.nombre, "Nombre de perfil requerido"), emptyToNull(req.body.descripcion), bool(req.body.activo, true), codigo]
+  );
+  if (!bool(req.body.activo, true)) dropRoleSessions(codigo);
+  await audit(req.user.username, "PERFIL_ACTUALIZADO", `Perfil ${codigo}`);
+  res.json(await getPerfilUsuario(codigo));
+}));
+
+app.put("/api/ajustes/perfiles/:codigo/estado", requireAccess("ajustes", "canUpdate"), asyncHandler(async (req, res) => {
+  const codigo = profileCode(req.params.codigo);
+  if (codigo === "ADMIN" && !bool(req.body.activo, true)) throw httpError(400, "No se puede dar de baja el perfil ADMIN");
+  await getPerfilUsuario(codigo);
+  await exec("UPDATE perfiles_usuario SET activo = ? WHERE codigo = ?", [bool(req.body.activo, true), codigo]);
+  if (!bool(req.body.activo, true)) dropRoleSessions(codigo);
+  await audit(req.user.username, "PERFIL_ESTADO", `Perfil ${codigo}`);
+  res.json(await getPerfilUsuario(codigo));
+}));
+
+app.delete("/api/ajustes/perfiles/:codigo", requireAccess("ajustes", "canDelete"), asyncHandler(async (req, res) => {
+  const codigo = profileCode(req.params.codigo);
+  if (codigo === "ADMIN") throw httpError(400, "No se puede dar de baja el perfil ADMIN");
+  await getPerfilUsuario(codigo);
+  await exec("UPDATE perfiles_usuario SET activo = FALSE WHERE codigo = ?", [codigo]);
+  dropRoleSessions(codigo);
+  await audit(req.user.username, "PERFIL_BAJA", `Perfil ${codigo}`);
+  res.status(204).end();
+}));
+
+app.delete("/api/ajustes/perfiles/:codigo/eliminar", requireAccess("ajustes", "canDelete"), asyncHandler(async (req, res) => {
+  const codigo = profileCode(req.params.codigo);
+  if (codigo === "ADMIN") throw httpError(400, "No se puede eliminar el perfil ADMIN");
+  const perfil = await getPerfilUsuario(codigo);
+  if (Number(perfil.usuariosAsignados || 0) > 0) {
+    throw httpError(409, "No se puede eliminar un perfil asignado a usuarios. Primero retira ese perfil de las cuentas.");
+  }
+  await exec("DELETE FROM perfiles_usuario WHERE codigo = ?", [codigo]);
+  dropRoleSessions(codigo);
+  await audit(req.user.username, "PERFIL_ELIMINADO", `Perfil ${codigo}`);
+  res.status(204).end();
+}));
+
+app.get("/api/ajustes/usuarios", requireAccess("ajustes", "canView"), asyncHandler(async (req, res) => {
+  res.json(await listUsuariosAjustes());
+}));
+
+app.post("/api/ajustes/usuarios", requireAccess("ajustes", "canCreate"), asyncHandler(async (req, res) => {
+  const body = req.body;
+  const roles = await validatedProfileCodes(body.roles);
+  const passwordHash = await bcrypt.hash(requiredPassword(body.password), config.bcryptStrength);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [result] = await conn.query(
+      `INSERT INTO users (username, password_hash, display_name, email, active, locked, failed_attempts, password_changed_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP(6))`,
+      [
+        required(body.username, "Usuario requerido"),
+        passwordHash,
+        required(body.displayName, "Nombre requerido"),
+        emptyToNull(body.email),
+        bool(body.active, true),
+        bool(body.locked, false)
+      ]
+    );
+    for (const role of roles) {
+      await conn.query("INSERT INTO user_roles (user_id, role) VALUES (?, ?)", [result.insertId, role]);
+    }
+    await conn.commit();
+    await audit(req.user.username, "USUARIO_CREADO", `Usuario ${result.insertId}`);
+    res.status(201).json(await getUsuarioAjustes(result.insertId));
+  } catch (error) {
+    await conn.rollback();
+    if (error.code === "ER_DUP_ENTRY") throw httpError(409, "Ya existe un usuario con ese nombre");
+    throw error;
+  } finally {
+    conn.release();
+  }
+}));
+
+app.put("/api/ajustes/usuarios/:id", requireAccess("ajustes", "canUpdate"), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  await getUsuarioAjustes(id);
+  const roles = await validatedProfileCodes(req.body.roles);
+  const nextActive = bool(req.body.active, true);
+  await ensureAdminAccountRemains(id, nextActive, roles);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      "UPDATE users SET username = ?, display_name = ?, email = ?, active = ?, locked = ? WHERE id = ?",
+      [
+        required(req.body.username, "Usuario requerido"),
+        required(req.body.displayName, "Nombre requerido"),
+        emptyToNull(req.body.email),
+        nextActive,
+        bool(req.body.locked, false),
+        id
+      ]
+    );
+    await conn.query("DELETE FROM user_roles WHERE user_id = ?", [id]);
+    for (const role of roles) {
+      await conn.query("INSERT INTO user_roles (user_id, role) VALUES (?, ?)", [id, role]);
+    }
+    await conn.commit();
+    dropUserSessions(id);
+    await audit(req.user.username, "USUARIO_ACTUALIZADO", `Usuario ${id}`);
+    res.json(await getUsuarioAjustes(id));
+  } catch (error) {
+    await conn.rollback();
+    if (error.code === "ER_DUP_ENTRY") throw httpError(409, "Ya existe un usuario con ese nombre");
+    throw error;
+  } finally {
+    conn.release();
+  }
+}));
+
+app.put("/api/ajustes/usuarios/:id/estado", requireAccess("ajustes", "canUpdate"), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const active = bool(req.body.active, true);
+  const user = await getUsuarioAjustes(id);
+  await ensureAdminAccountRemains(id, active, user.roles);
+  await exec("UPDATE users SET active = ?, locked = CASE WHEN ? THEN locked ELSE TRUE END WHERE id = ?", [active, active, id]);
+  if (!active) dropUserSessions(id);
+  await audit(req.user.username, active ? "USUARIO_ACTIVADO" : "USUARIO_BAJA", `Usuario ${id}`);
+  res.json(await getUsuarioAjustes(id));
+}));
+
+app.delete("/api/ajustes/usuarios/:id", requireAccess("ajustes", "canDelete"), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const user = await getUsuarioAjustes(id);
+  await ensureAdminAccountRemains(id, false, user.roles);
+  await exec("UPDATE users SET active = FALSE, locked = TRUE WHERE id = ?", [id]);
+  dropUserSessions(id);
+  await audit(req.user.username, "USUARIO_BAJA", `Usuario ${id}`);
+  res.status(204).end();
+}));
+
+app.put("/api/ajustes/usuarios/:id/password", requireAccess("ajustes", "canUpdate"), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  await getUsuarioAjustes(id);
+  const passwordHash = await bcrypt.hash(requiredPassword(req.body.password), config.bcryptStrength);
+  await exec(
+    "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP(6), failed_attempts = 0, locked = FALSE WHERE id = ?",
+    [passwordHash, id]
+  );
+  dropUserSessions(id, req.token);
+  await audit(req.user.username, "USUARIO_PASSWORD", `Usuario ${id}`);
+  res.json(await getUsuarioAjustes(id));
+}));
+
+app.put("/api/ajustes/usuarios/:id/unlock", requireAccess("ajustes", "canUpdate"), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  await getUsuarioAjustes(id);
+  await exec("UPDATE users SET locked = FALSE, failed_attempts = 0 WHERE id = ?", [id]);
+  await audit(req.user.username, "USUARIO_DESBLOQUEADO", `Usuario ${id}`);
+  res.json(await getUsuarioAjustes(id));
+}));
+
+app.get("/api/ajustes/accesos", requireAccess("ajustes", "canView"), asyncHandler(async (req, res) => {
+  const [perfiles, accesos] = await Promise.all([
+    listPerfilesUsuario(),
+    listProfileAccess()
+  ]);
+  res.json({ catalog: ACCESS_CATALOG, actions: ACCESS_ACTION_KEYS, perfiles, accesos });
+}));
+
+app.put("/api/ajustes/accesos/:codigo", requireAccess("ajustes", "canUpdate"), asyncHandler(async (req, res) => {
+  const codigo = profileCode(req.params.codigo);
+  await getPerfilUsuario(codigo);
+  const accesos = normalizeProfileAccess(codigo, req.body.accesos);
+  const ajustes = accesos.find(item => item.modulo === "ajustes");
+  if (codigo === "ADMIN" && !ajustes?.canView) {
+    throw httpError(400, "El perfil ADMIN debe conservar acceso a Ajustes");
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query("DELETE FROM perfil_accesos WHERE perfil_codigo = ?", [codigo]);
+    for (const acceso of accesos) {
+      await conn.query(
+        `INSERT INTO perfil_accesos
+          (perfil_codigo, modulo, can_view, can_create, can_update, can_delete, can_import, can_export)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          codigo,
+          acceso.modulo,
+          acceso.canView,
+          acceso.canCreate,
+          acceso.canUpdate,
+          acceso.canDelete,
+          acceso.canImport,
+          acceso.canExport
+        ]
+      );
+    }
+    await conn.commit();
+    await refreshAccessSessionsForRole(codigo);
+    await audit(req.user.username, "PERFIL_ACCESOS", `Perfil ${codigo}`);
+    res.json({ catalog: ACCESS_CATALOG, actions: ACCESS_ACTION_KEYS, perfiles: await listPerfilesUsuario(), accesos: await listProfileAccess() });
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}));
+
+app.get("/api/clientes", requireReadAccess("clientes"), asyncHandler(async (req, res) => {
   const q = String(req.query.q || "").trim();
   const rows = await all(
     `SELECT id, nombre_cliente AS nombreCliente, calle, colonia, municipio, estado, rfc, cp, razon_social AS razonSocial,
@@ -112,8 +408,8 @@ app.get("/api/clientes", asyncHandler(async (req, res) => {
   res.json(rows.map(row => ({ ...row, formatoFactura: Boolean(row.formatoFactura), activo: Boolean(row.activo) })));
 }));
 
-app.post("/api/clientes", asyncHandler(async (req, res) => {
-  const body = req.body;
+app.post("/api/clientes", requireAccess("clientes", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateClienteBody(req.body);
   const result = await exec(
     `INSERT INTO clientes (nombre_cliente, calle, colonia, municipio, estado, rfc, cp, razon_social, formato_factura, activo)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -134,8 +430,8 @@ app.post("/api/clientes", asyncHandler(async (req, res) => {
   res.status(201).json(await getCliente(result.insertId));
 }));
 
-app.put("/api/clientes/:id", asyncHandler(async (req, res) => {
-  const body = req.body;
+app.put("/api/clientes/:id", requireAccess("clientes", "canUpdate"), asyncHandler(async (req, res) => {
+  const body = validateClienteBody(req.body);
   await exec(
     `UPDATE clientes
         SET nombre_cliente = ?, calle = ?, colonia = ?, municipio = ?, estado = ?, rfc = ?, cp = ?, razon_social = ?,
@@ -159,7 +455,7 @@ app.put("/api/clientes/:id", asyncHandler(async (req, res) => {
   res.json(await getCliente(req.params.id));
 }));
 
-app.get("/api/proveedores", asyncHandler(async (req, res) => {
+app.get("/api/proveedores", requireReadAccess("proveedores"), asyncHandler(async (req, res) => {
   const q = String(req.query.q || "").trim();
   const rows = await all(
     `SELECT id, nombre_proveedor AS nombreProveedor, razon_social AS razonSocial, representante_legal AS representanteLegal,
@@ -174,7 +470,7 @@ app.get("/api/proveedores", asyncHandler(async (req, res) => {
   res.json(rows.map(row => ({ ...row, activo: Boolean(row.activo) })));
 }));
 
-app.post("/api/proveedores", asyncHandler(async (req, res) => {
+app.post("/api/proveedores", requireAccess("proveedores", "canCreate"), asyncHandler(async (req, res) => {
   const result = await exec(
     `INSERT INTO proveedores
       (nombre_proveedor, razon_social, representante_legal, direccion_fiscal, ciudad, rfc, calle, colonia, municipio, estado, cp,
@@ -186,7 +482,7 @@ app.post("/api/proveedores", asyncHandler(async (req, res) => {
   res.status(201).json(await getProveedor(result.insertId));
 }));
 
-app.put("/api/proveedores/:id", asyncHandler(async (req, res) => {
+app.put("/api/proveedores/:id", requireAccess("proveedores", "canUpdate"), asyncHandler(async (req, res) => {
   await exec(
     `UPDATE proveedores
         SET nombre_proveedor = ?, razon_social = ?, representante_legal = ?, direccion_fiscal = ?, ciudad = ?, rfc = ?,
@@ -199,7 +495,7 @@ app.put("/api/proveedores/:id", asyncHandler(async (req, res) => {
   res.json(await getProveedor(req.params.id));
 }));
 
-app.get("/api/operadores", asyncHandler(async (req, res) => {
+app.get("/api/operadores", requireReadAccess("operadores", "tiempos"), asyncHandler(async (req, res) => {
   const rows = await all(
     `SELECT id, nombre_operador AS nombreOperador, turno, activo, supervisor, chofer
        FROM operadores WHERE activo = TRUE ORDER BY nombre_operador ASC`
@@ -207,7 +503,7 @@ app.get("/api/operadores", asyncHandler(async (req, res) => {
   res.json(rows.map(row => ({ ...row, activo: Boolean(row.activo), supervisor: Boolean(row.supervisor), chofer: Boolean(row.chofer) })));
 }));
 
-app.post("/api/operadores", asyncHandler(async (req, res) => {
+app.post("/api/operadores", requireAccess("operadores", "canCreate"), asyncHandler(async (req, res) => {
   const result = await exec(
     "INSERT INTO operadores (nombre_operador, turno, activo, supervisor, chofer) VALUES (?, ?, ?, ?, ?)",
     operadorParams(req.body)
@@ -216,7 +512,7 @@ app.post("/api/operadores", asyncHandler(async (req, res) => {
   res.status(201).json(await getOperador(result.insertId));
 }));
 
-app.put("/api/operadores/:id", asyncHandler(async (req, res) => {
+app.put("/api/operadores/:id", requireAccess("operadores", "canUpdate"), asyncHandler(async (req, res) => {
   await exec(
     "UPDATE operadores SET nombre_operador = ?, turno = ?, activo = ?, supervisor = ?, chofer = ? WHERE id = ?",
     [...operadorParams(req.body), req.params.id]
@@ -225,16 +521,16 @@ app.put("/api/operadores/:id", asyncHandler(async (req, res) => {
   res.json(await getOperador(req.params.id));
 }));
 
-app.get("/api/estatus-produccion", asyncHandler(async (req, res) => {
+app.get("/api/estatus-produccion", requireAnyReadAccess("piezas", "monitor", "tiempos", "reportes", "dashboard"), asyncHandler(async (req, res) => {
   const rows = await all("SELECT id, descripcion, grupo FROM estatus_produccion ORDER BY descripcion ASC");
   res.json(rows);
 }));
 
-app.get("/api/piezas", asyncHandler(async (req, res) => {
+app.get("/api/piezas", requireAnyReadAccess("piezas", "monitor", "ordenes", "requisiciones", "remisiones", "reportes", "dashboard"), asyncHandler(async (req, res) => {
   res.json(await listPiezas());
 }));
 
-app.post("/api/piezas", asyncHandler(async (req, res) => {
+app.post("/api/piezas", requireAccess("piezas", "canCreate"), asyncHandler(async (req, res) => {
   const body = normalizePieza(req.body);
   const result = await exec(
     `INSERT INTO piezas
@@ -247,7 +543,7 @@ app.post("/api/piezas", asyncHandler(async (req, res) => {
   res.status(201).json(await getPieza(result.insertId));
 }));
 
-app.post("/api/piezas/dibujos", upload.single("archivo"), asyncHandler(async (req, res) => {
+app.post("/api/piezas/dibujos", requireAccess("piezas", "canCreate"), upload.single("archivo"), asyncHandler(async (req, res) => {
   if (!req.file) throw httpError(400, "Selecciona un dibujo para importar");
   res.status(201).json({
     archivo: `uploads/dibujos/${req.file.filename}`,
@@ -255,7 +551,11 @@ app.post("/api/piezas/dibujos", upload.single("archivo"), asyncHandler(async (re
   });
 }));
 
-app.get("/api/piezas/:id/pdf", asyncHandler(async (req, res) => {
+app.get("/api/piezas/:id/pdf", requireAnyAccess(
+  { moduleId: "piezas", actionKey: "canExport" },
+  { moduleId: "monitor", actionKey: "canExport" },
+  { moduleId: "reportes", actionKey: "canExport" }
+), asyncHandler(async (req, res) => {
   const pieza = await getPieza(req.params.id);
   const [notas, estimaciones] = await Promise.all([
     listPiezaNotas(pieza.id),
@@ -264,7 +564,7 @@ app.get("/api/piezas/:id/pdf", asyncHandler(async (req, res) => {
   sendPdf(res, `pieza-${pieza.id}.pdf`, piezaDocumentLines(pieza, notas, estimaciones));
 }));
 
-app.put("/api/piezas/:id", asyncHandler(async (req, res) => {
+app.put("/api/piezas/:id", requireAccess("piezas", "canUpdate"), asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const body = normalizePieza(req.body);
   if (id === TORNOS_INTERNAL_PIEZA_ID) {
@@ -283,7 +583,10 @@ app.put("/api/piezas/:id", asyncHandler(async (req, res) => {
   res.json(await getPieza(id));
 }));
 
-app.put("/api/piezas/:id/estatus", asyncHandler(async (req, res) => {
+app.put("/api/piezas/:id/estatus", requireAnyAccess(
+  { moduleId: "piezas", actionKey: "canUpdate" },
+  { moduleId: "monitor", actionKey: "canUpdate" }
+), asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const estatusId = Number(req.body.estatusId);
   const estatus = await one("SELECT id, descripcion FROM estatus_produccion WHERE id = ?", [estatusId]);
@@ -301,23 +604,26 @@ app.put("/api/piezas/:id/estatus", asyncHandler(async (req, res) => {
   res.json(await getPieza(id));
 }));
 
-app.get("/api/piezas/:id/notas", asyncHandler(async (req, res) => {
+app.get("/api/piezas/:id/notas", requireAnyReadAccess("piezas", "monitor", "reportes"), asyncHandler(async (req, res) => {
   await getPieza(req.params.id);
   res.json(await listPiezaNotas(req.params.id));
 }));
 
-app.post("/api/piezas/:id/notas", asyncHandler(async (req, res) => {
+app.post("/api/piezas/:id/notas", requireAnyAccess(
+  { moduleId: "piezas", actionKey: "canUpdate" },
+  { moduleId: "monitor", actionKey: "canUpdate" }
+), asyncHandler(async (req, res) => {
   const pieza = await getPieza(req.params.id);
   const saved = await addPiezaNota(pieza.id, req.body.estatusId || pieza.estatusId, req.body.nota, req.user.username);
   res.status(201).json(saved);
 }));
 
-app.get("/api/piezas/:id/estimaciones", asyncHandler(async (req, res) => {
+app.get("/api/piezas/:id/estimaciones", requireAnyReadAccess("monitor", "reportes"), asyncHandler(async (req, res) => {
   await getPieza(req.params.id);
   res.json(await listEstimaciones(req.params.id));
 }));
 
-app.post("/api/piezas/:id/estimaciones", asyncHandler(async (req, res) => {
+app.post("/api/piezas/:id/estimaciones", requireAccess("monitor", "canUpdate"), asyncHandler(async (req, res) => {
   const pieza = await getPieza(req.params.id);
   const result = await exec(
     `INSERT INTO pieza_estimaciones
@@ -337,16 +643,16 @@ app.post("/api/piezas/:id/estimaciones", asyncHandler(async (req, res) => {
   res.status(201).json((await listEstimaciones(pieza.id)).find(item => Number(item.id) === Number(result.insertId)));
 }));
 
-app.get("/api/estimaciones", asyncHandler(async (req, res) => {
+app.get("/api/estimaciones", requireAnyReadAccess("monitor", "reportes", "dashboard"), asyncHandler(async (req, res) => {
   res.json(await listEstimaciones());
 }));
 
-app.get("/api/ordenes-trabajo", asyncHandler(async (req, res) => {
+app.get("/api/ordenes-trabajo", requireReadAccess("ordenes"), asyncHandler(async (req, res) => {
   res.json(await listOrdenesTrabajo());
 }));
 
-app.post("/api/ordenes-trabajo", asyncHandler(async (req, res) => {
-  const body = req.body;
+app.post("/api/ordenes-trabajo", requireAccess("ordenes", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateOrdenTrabajoBody(req.body);
   const piezaIds = Array.isArray(body.piezaIds) ? body.piezaIds.map(Number).filter(Number.isFinite) : [];
   if (!piezaIds.length) throw httpError(400, "Selecciona al menos una pieza");
   const conn = await pool.getConnection();
@@ -379,13 +685,13 @@ app.post("/api/ordenes-trabajo", asyncHandler(async (req, res) => {
   }
 }));
 
-app.get("/api/ordenes-trabajo/:id/pdf", asyncHandler(async (req, res) => {
+app.get("/api/ordenes-trabajo/:id/pdf", requireAccess("ordenes", "canExport"), asyncHandler(async (req, res) => {
   const orden = await getOrdenTrabajo(req.params.id);
   const piezas = (await listPiezas()).filter(pieza => Number(pieza.ordenTrabajoId) === Number(orden.id));
   sendPdf(res, `orden-trabajo-${orden.id}.pdf`, ordenTrabajoLines(orden, piezas));
 }));
 
-app.get("/api/monitor-produccion", asyncHandler(async (req, res) => {
+app.get("/api/monitor-produccion", requireReadAccess("monitor"), asyncHandler(async (req, res) => {
   const rows = await all(
     `SELECT p.id AS piezaId, p.orden_trabajo_id AS ordenTrabajoId, c.nombre_cliente AS cliente, p.orden_compra AS ordenCompra,
             p.no_parte AS noParte, p.no_dibujo AS noDibujo, p.descripcion, p.cantidad, p.cantidad_entregada AS cantidadEntregada,
@@ -410,7 +716,7 @@ app.get("/api/monitor-produccion", asyncHandler(async (req, res) => {
   res.json(rows.map(row => ({ ...row, vencida: Boolean(row.vencida) })));
 }));
 
-app.get("/api/tiempos", asyncHandler(async (req, res) => {
+app.get("/api/tiempos", requireAnyReadAccess("tiempos", "reportes"), asyncHandler(async (req, res) => {
   const rows = await all(
     `SELECT t.id, t.pieza_id AS piezaId, p.descripcion AS piezaDescripcion, t.operador_id AS operadorId,
             o.nombre_operador AS operadorNombre, t.estatus_id AS estatusId, e.descripcion AS estatus,
@@ -420,30 +726,31 @@ app.get("/api/tiempos", asyncHandler(async (req, res) => {
             t.minutos
        FROM tiempos_produccion t
        JOIN piezas p ON p.id = t.pieza_id
-       JOIN operadores o ON o.id = t.operador_id
-       JOIN estatus_produccion e ON e.id = t.estatus_id
+      JOIN operadores o ON o.id = t.operador_id
+      JOIN estatus_produccion e ON e.id = t.estatus_id
       ORDER BY t.inicio_operacion DESC
-      LIMIT 25`
+      LIMIT 500`
   );
   res.json(rows);
 }));
 
-app.post("/api/tiempos", asyncHandler(async (req, res) => {
-  const inicio = toMysqlDateTime(req.body.inicio);
-  const fin = toMysqlDateTime(req.body.fin);
-  const minutos = Math.round((new Date(req.body.fin).getTime() - new Date(req.body.inicio).getTime()) / 60000);
+app.post("/api/tiempos", requireAccess("tiempos", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateTiempoBody(req.body);
+  const inicio = toMysqlDateTime(body.inicio);
+  const fin = toMysqlDateTime(body.fin);
+  const minutos = Math.round((new Date(body.fin).getTime() - new Date(body.inicio).getTime()) / 60000);
   if (!Number.isFinite(minutos) || minutos <= 0) throw httpError(400, "La hora fin debe ser posterior al inicio");
   const result = await exec(
     `INSERT INTO tiempos_produccion (pieza_id, operador_id, estatus_id, descripcion_operacion, inicio_operacion, fin_operacion, minutos)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [req.body.piezaId, req.body.operadorId, req.body.estatusId, required(req.body.descripcionOperacion, "Operacion requerida"), inicio, fin, minutos]
+    [body.piezaId, body.operadorId, body.estatusId, body.descripcionOperacion, inicio, fin, minutos]
   );
-  await exec("UPDATE piezas SET estatus_id = ? WHERE id = ?", [req.body.estatusId, req.body.piezaId]);
+  await exec("UPDATE piezas SET estatus_id = ? WHERE id = ?", [body.estatusId, body.piezaId]);
   await audit(req.user.username, "TIEMPO_CAPTURADO", `Tiempo ${result.insertId}`);
   res.status(201).json((await all("SELECT * FROM tiempos_produccion WHERE id = ?", [result.insertId]))[0]);
 }));
 
-app.get("/api/dashboard", asyncHandler(async (req, res) => {
+app.get("/api/dashboard", requireAccess("dashboard", "canView"), asyncHandler(async (req, res) => {
   const [pendientes, vencidas, ordenes, requisiciones, reorden] = await Promise.all([
     count("SELECT COUNT(*) AS total FROM piezas WHERE entregado = FALSE"),
     count("SELECT COUNT(*) AS total FROM piezas WHERE entregado = FALSE AND fecha_compromiso < CURRENT_DATE()"),
@@ -454,11 +761,11 @@ app.get("/api/dashboard", asyncHandler(async (req, res) => {
   res.json({ piezasPendientes: pendientes, piezasVencidas: vencidas, ordenesTrabajo: ordenes, requisicionesPendientes: requisiciones, articulosReorden: reorden });
 }));
 
-app.get("/api/requisiciones", asyncHandler(async (req, res) => {
+app.get("/api/requisiciones", requireAnyReadAccess("requisiciones", "ordenesCompra"), asyncHandler(async (req, res) => {
   res.json(await listRequisiciones());
 }));
 
-app.get("/api/requisiciones/material-opciones", asyncHandler(async (req, res) => {
+app.get("/api/requisiciones/material-opciones", requireAnyReadAccess("requisiciones", "ordenesCompra"), asyncHandler(async (req, res) => {
   const rows = await all(
     `SELECT id, material, descripcion, unidad_medida AS unidadMedida
        FROM requisicion_material_opciones
@@ -468,8 +775,9 @@ app.get("/api/requisiciones/material-opciones", asyncHandler(async (req, res) =>
   res.json(rows);
 }));
 
-app.post("/api/requisiciones", asyncHandler(async (req, res) => {
-  const detalles = Array.isArray(req.body.detalles) ? req.body.detalles : [];
+app.post("/api/requisiciones", requireAccess("requisiciones", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateRequisicionBody(req.body);
+  const detalles = body.detalles;
   if (!detalles.length) throw httpError(400, "Agrega al menos una partida");
   const conn = await pool.getConnection();
   try {
@@ -478,11 +786,11 @@ app.post("/api/requisiciones", asyncHandler(async (req, res) => {
       `INSERT INTO requisiciones (solicitante, fecha, prioridad, usuario_solicitante, autorizacion, observaciones, surtido, enviada_a_compras, cancelado)
        VALUES (?, NOW(6), ?, ?, ?, ?, FALSE, FALSE, FALSE)`,
       [
-        required(req.body.solicitante, "Solicitante requerido"),
-        req.body.prioridad || "Normal",
+        body.solicitante,
+        body.prioridad || "Normal",
         req.user.username,
-        emptyToNull(req.body.autorizacion),
-        emptyToNull(req.body.observaciones)
+        emptyToNull(body.autorizacion),
+        emptyToNull(body.observaciones)
       ]
     );
     for (const detalle of detalles) {
@@ -503,22 +811,23 @@ app.post("/api/requisiciones", asyncHandler(async (req, res) => {
   }
 }));
 
-app.get("/api/requisiciones/:folio/pdf", asyncHandler(async (req, res) => {
+app.get("/api/requisiciones/:folio/pdf", requireAccess("requisiciones", "canExport"), asyncHandler(async (req, res) => {
   const requisicion = (await listRequisiciones()).find(item => Number(item.folio) === Number(req.params.folio));
   if (!requisicion) throw httpError(404, "Requisicion no encontrada");
-  sendPdf(res, `requisicion-${requisicion.folio}.pdf`, requisicionLines(requisicion));
+  sendPdf(res, `requisicion-${requisicion.folio}.pdf`, requisicionLines(requisicion), { fontName: "Courier", fontSize: 8, lineHeight: 12, wrapWidth: 105, pageSize: 58 });
 }));
 
-app.get("/api/ordenes-compra", asyncHandler(async (req, res) => {
+app.get("/api/ordenes-compra", requireReadAccess("ordenesCompra"), asyncHandler(async (req, res) => {
   res.json(await listOrdenesCompra());
 }));
 
-app.post("/api/ordenes-compra", asyncHandler(async (req, res) => {
-  const detalles = Array.isArray(req.body.detalles) ? req.body.detalles : [];
+app.post("/api/ordenes-compra", requireAccess("ordenesCompra", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateOrdenCompraBody(req.body);
+  const detalles = body.detalles;
   if (!detalles.length) throw httpError(400, "Selecciona al menos una partida");
-  const proveedor = await getProveedor(req.body.proveedorId);
-  const retencionIvaPct = num(req.body.retencionIvaPct ?? proveedor.retencionIvaPct, 0);
-  const retencionIsrPct = num(req.body.retencionIsrPct ?? proveedor.retencionIsrPct, 0);
+  const proveedor = await getProveedor(body.proveedorId);
+  const retencionIvaPct = num(body.retencionIvaPct ?? proveedor.retencionIvaPct, 0);
+  const retencionIsrPct = num(body.retencionIsrPct ?? proveedor.retencionIsrPct, 0);
   const calculated = detalles.map(detalle => ({
     ...detalle,
     cantidad: num(detalle.cantidad, 0),
@@ -537,7 +846,7 @@ app.post("/api/ordenes-compra", asyncHandler(async (req, res) => {
       `INSERT INTO ordenes_compra
         (folio, proveedor_id, fecha, moneda, observaciones, created_by, subtotal, iva, retencion_iva_pct, retencion_isr_pct, retencion_iva, retencion_isr, total, cancelado)
        VALUES (?, ?, NOW(6), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
-      [folio, req.body.proveedorId, req.body.moneda || "Moneda Nacional", emptyToNull(req.body.observaciones), req.user.username, subtotal, iva, retencionIvaPct, retencionIsrPct, retencionIva, retencionIsr, total]
+      [folio, body.proveedorId, body.moneda || "Moneda Nacional", emptyToNull(body.observaciones), req.user.username, subtotal, iva, retencionIvaPct, retencionIsrPct, retencionIva, retencionIsr, total]
     );
     for (const detalle of calculated) {
       if (detalle.requisicionDetalleId) {
@@ -567,13 +876,23 @@ app.post("/api/ordenes-compra", asyncHandler(async (req, res) => {
   }
 }));
 
-app.get("/api/ordenes-compra/:id/pdf", asyncHandler(async (req, res) => {
-  const orden = (await listOrdenesCompra()).find(item => Number(item.id) === Number(req.params.id));
+app.delete("/api/ordenes-compra/:id", requireAccess("ordenesCompra", "canDelete"), asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const orden = (await listOrdenesCompra()).find(item => Number(item.id) === id);
   if (!orden) throw httpError(404, "Orden de compra no encontrada");
-  sendPdf(res, `${orden.folio}.pdf`, ordenCompraLines(orden));
+  if (orden.cancelado) throw httpError(409, "La orden de compra ya esta cancelada");
+  await exec("UPDATE ordenes_compra SET cancelado = TRUE WHERE id = ?", [id]);
+  await audit(req.user.username, "ORDEN_COMPRA_CANCELADA", `OC ${orden.folio}`);
+  res.json({ ...orden, cancelado: true });
 }));
 
-app.get("/api/ordenes-compra/:id/word", asyncHandler(async (req, res) => {
+app.get("/api/ordenes-compra/:id/pdf", requireAccess("ordenesCompra", "canExport"), asyncHandler(async (req, res) => {
+  const orden = (await listOrdenesCompra()).find(item => Number(item.id) === Number(req.params.id));
+  if (!orden) throw httpError(404, "Orden de compra no encontrada");
+  sendPdf(res, `${orden.folio}.pdf`, ordenCompraLines(orden), { fontName: "Courier", fontSize: 8, lineHeight: 12, wrapWidth: 100, pageSize: 58 });
+}));
+
+app.get("/api/ordenes-compra/:id/word", requireAccess("ordenesCompra", "canExport"), asyncHandler(async (req, res) => {
   const orden = (await listOrdenesCompra()).find(item => Number(item.id) === Number(req.params.id));
   if (!orden) throw httpError(404, "Orden de compra no encontrada");
   res.setHeader("Content-Type", "application/rtf");
@@ -581,7 +900,7 @@ app.get("/api/ordenes-compra/:id/word", asyncHandler(async (req, res) => {
   res.send(Buffer.from(rtfDocument(ordenCompraLines(orden)), "utf8"));
 }));
 
-app.get("/api/almacen/articulos", asyncHandler(async (req, res) => {
+app.get("/api/almacen/articulos", requireReadAccess("almacen"), asyncHandler(async (req, res) => {
   const rows = await all(
     `SELECT id, descripcion, medida, existencia, minimo, maximo, punto_reorden AS puntoReorden, activo
        FROM almacen_articulos
@@ -591,17 +910,18 @@ app.get("/api/almacen/articulos", asyncHandler(async (req, res) => {
   res.json(rows.map(row => ({ ...row, activo: Boolean(row.activo) })));
 }));
 
-app.post("/api/almacen/articulos", asyncHandler(async (req, res) => {
+app.post("/api/almacen/articulos", requireAccess("almacen", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateAlmacenArticuloBody(req.body);
   const result = await exec(
     `INSERT INTO almacen_articulos (descripcion, medida, existencia, minimo, maximo, punto_reorden, activo)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [required(req.body.descripcion, "Articulo requerido"), emptyToNull(req.body.medida), num(req.body.existencia, 0), num(req.body.minimo, 0), num(req.body.maximo, 0), num(req.body.puntoReorden, 0), bool(req.body.activo, true)]
+    [body.descripcion, emptyToNull(body.medida), body.existencia, body.minimo, body.maximo, body.puntoReorden, body.activo]
   );
   await audit(req.user.username, "ARTICULO_CREADO", `Articulo ${result.insertId}`);
   res.status(201).json((await all("SELECT id, descripcion, medida, existencia, minimo, maximo, punto_reorden AS puntoReorden, activo FROM almacen_articulos WHERE id = ?", [result.insertId]))[0]);
 }));
 
-app.get("/api/almacen/kardex", asyncHandler(async (req, res) => {
+app.get("/api/almacen/kardex", requireReadAccess("almacen"), asyncHandler(async (req, res) => {
   const rows = await all(
     `SELECT k.id, k.articulo_id AS articuloId, a.descripcion AS articuloDescripcion,
             DATE_FORMAT(k.fecha, '%Y-%m-%dT%H:%i:%s') AS fecha, k.tipo, k.cantidad, k.precio_unitario AS precioUnitario,
@@ -614,21 +934,22 @@ app.get("/api/almacen/kardex", asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
-app.post("/api/almacen/entradas", asyncHandler(async (req, res) => {
+app.post("/api/almacen/entradas", requireAccess("almacen", "canUpdate"), asyncHandler(async (req, res) => {
   res.status(201).json(await almacenMovimiento(req, "ENTRADA"));
 }));
 
-app.post("/api/almacen/salidas", asyncHandler(async (req, res) => {
+app.post("/api/almacen/salidas", requireAccess("almacen", "canUpdate"), asyncHandler(async (req, res) => {
   res.status(201).json(await almacenMovimiento(req, "SALIDA"));
 }));
 
-app.get("/api/remisiones", asyncHandler(async (req, res) => {
+app.get("/api/remisiones", requireReadAccess("remisiones"), asyncHandler(async (req, res) => {
   res.json(await listRemisiones());
 }));
 
-app.post("/api/remisiones", asyncHandler(async (req, res) => {
-  const piezaId = Number(req.body.piezaId);
-  const cantidadEntregada = num(req.body.cantidadEntregada, 0);
+app.post("/api/remisiones", requireAccess("remisiones", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateRemisionBody(req.body);
+  const piezaId = body.piezaId;
+  const cantidadEntregada = body.cantidadEntregada;
   if (piezaId === TORNOS_INTERNAL_PIEZA_ID) throw httpError(400, "La pieza 2460 es interna de Tornos SA de CV");
   const conn = await pool.getConnection();
   try {
@@ -637,11 +958,11 @@ app.post("/api/remisiones", asyncHandler(async (req, res) => {
     if (!pieza) throw httpError(404, "Pieza no encontrada");
     const nuevaCantidad = Number(pieza.cantidadEntregada) + cantidadEntregada;
     if (nuevaCantidad > Number(pieza.cantidad)) throw httpError(400, "La remision excede la cantidad de la pieza");
-    const folio = req.body.folio || `REM-${Date.now()}`;
+    const folio = body.folio || `REM-${Date.now()}`;
     const [result] = await conn.query(
       `INSERT INTO remisiones (pieza_id, cliente_id, folio, fecha, cantidad_entregada, observaciones, autorizacion, chofer, activo)
        VALUES (?, ?, ?, NOW(6), ?, ?, ?, ?, TRUE)`,
-      [piezaId, pieza.clienteId, folio, cantidadEntregada, emptyToNull(req.body.observaciones), emptyToNull(req.body.autorizacion), emptyToNull(req.body.chofer)]
+      [piezaId, pieza.clienteId, folio, cantidadEntregada, emptyToNull(body.observaciones), emptyToNull(body.autorizacion), emptyToNull(body.chofer)]
     );
     await conn.query("UPDATE piezas SET cantidad_entregada = ?, entregado = ? WHERE id = ?", [nuevaCantidad, nuevaCantidad >= Number(pieza.cantidad), piezaId]);
     await conn.commit();
@@ -655,33 +976,34 @@ app.post("/api/remisiones", asyncHandler(async (req, res) => {
   }
 }));
 
-app.get("/api/remisiones/:id/pdf", asyncHandler(async (req, res) => {
+app.get("/api/remisiones/:id/pdf", requireAccess("remisiones", "canExport"), asyncHandler(async (req, res) => {
   const remision = (await listRemisiones()).find(item => Number(item.id) === Number(req.params.id));
   if (!remision) throw httpError(404, "Remision no encontrada");
   const [pieza, notas] = await Promise.all([
     getPieza(remision.piezaId),
     listPiezaNotas(remision.piezaId)
   ]);
-  sendPdf(res, `${remision.folio}.pdf`, remisionLines(remision, pieza, notas));
+  sendPdf(res, `${remision.folio}.pdf`, remisionLines(remision, pieza, notas), { fontName: "Courier", fontSize: 8, lineHeight: 12, wrapWidth: 105, pageSize: 58 });
 }));
 
-app.get("/api/facturas", asyncHandler(async (req, res) => {
+app.get("/api/facturas", requireReadAccess("reportes"), asyncHandler(async (req, res) => {
   res.json(await listFacturas());
 }));
 
-app.post("/api/facturas", asyncHandler(async (req, res) => {
-  const remisionId = req.body.remisionId ? Number(req.body.remisionId) : null;
+app.post("/api/facturas", requireAccess("reportes", "canCreate"), asyncHandler(async (req, res) => {
+  const body = validateFacturaBody(req.body);
+  const remisionId = body.remisionId ? Number(body.remisionId) : null;
   const remision = remisionId ? (await listRemisiones()).find(item => Number(item.id) === remisionId) : null;
   if (remisionId && !remision) throw httpError(404, "Remision no encontrada");
   if (remisionId) {
     const existing = await one("SELECT id FROM facturas WHERE remision_id = ? AND cancelado = FALSE", [remisionId]);
     if (existing) throw httpError(409, "La remision ya tiene una factura activa registrada");
   }
-  const clienteId = remision?.clienteId || Number(req.body.clienteId);
+  const clienteId = remision?.clienteId || Number(body.clienteId);
   await getCliente(clienteId);
-  const subtotal = round2(num(req.body.subtotal, 0));
-  const iva = req.body.iva == null || req.body.iva === "" ? round2(subtotal * IVA_RATE) : round2(num(req.body.iva, 0));
-  const total = req.body.total == null || req.body.total === "" ? round2(subtotal + iva) : round2(num(req.body.total, 0));
+  const subtotal = round2(num(body.subtotal, 0));
+  const iva = body.iva == null || body.iva === "" ? round2(subtotal * IVA_RATE) : round2(num(body.iva, 0));
+  const total = body.total == null || body.total === "" ? round2(subtotal + iva) : round2(num(body.total, 0));
   const result = await exec(
     `INSERT INTO facturas
       (remision_id, cliente_id, serie, folio, fecha, subtotal, iva, total, estatus, uuid, observaciones, created_by, cancelado)
@@ -689,14 +1011,14 @@ app.post("/api/facturas", asyncHandler(async (req, res) => {
     [
       remisionId,
       clienteId,
-      emptyToNull(req.body.serie),
-      required(req.body.folio, "Folio de factura requerido"),
+      emptyToNull(body.serie),
+      body.folio,
       subtotal,
       iva,
       total,
-      emptyToNull(req.body.estatus) || "Pendiente",
-      emptyToNull(req.body.uuid),
-      emptyToNull(req.body.observaciones),
+      emptyToNull(body.estatus) || "Pendiente",
+      emptyToNull(body.uuid),
+      emptyToNull(body.observaciones),
       req.user.username
     ]
   );
@@ -704,7 +1026,7 @@ app.post("/api/facturas", asyncHandler(async (req, res) => {
   res.status(201).json((await listFacturas()).find(item => Number(item.id) === Number(result.insertId)));
 }));
 
-app.get("/api/facturas/:id/pdf", asyncHandler(async (req, res) => {
+app.get("/api/facturas/:id/pdf", requireAccess("reportes", "canExport"), asyncHandler(async (req, res) => {
   const factura = (await listFacturas()).find(item => Number(item.id) === Number(req.params.id));
   if (!factura) throw httpError(404, "Factura no encontrada");
   sendPdf(res, `factura-${factura.folio}.pdf`, facturaLines(factura));
@@ -727,18 +1049,29 @@ async function start() {
   if (!config.adminPassword) {
     throw new Error("APP_BOOTSTRAP_ADMIN_PASSWORD es requerido. Define .env antes de iniciar.");
   }
+  validateProductionConfig();
   await ensureDatabase();
-  pool = await mysql.createPool({
-    ...config.db,
-    waitForConnections: true,
-    connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
-    multipleStatements: true,
-    dateStrings: true
-  });
-  await migrate();
+  const migrationPool = createDbPool({ multipleStatements: true });
+  try {
+    pool = migrationPool;
+    await migrate();
+  } finally {
+    await migrationPool.end();
+  }
+  pool = createDbPool({ multipleStatements: false });
   await bootstrapAdmin();
   app.listen(config.port, () => {
     console.log(`Tornos SA de CV Node escuchando en http://localhost:${config.port}`);
+  });
+}
+
+function createDbPool({ multipleStatements = false } = {}) {
+  return mysql.createPool({
+    ...config.db,
+    waitForConnections: true,
+    connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
+    multipleStatements,
+    dateStrings: true
   });
 }
 
@@ -753,7 +1086,7 @@ function parseDbConfig() {
       user: process.env.DB_USER || url.username || "tornos_app",
       password: process.env.DB_PASSWORD || url.password || "",
       charset: "utf8mb4",
-      ssl: url.searchParams.get("useSSL") === "true" ? { rejectUnauthorized: false } : undefined
+      ssl: url.searchParams.get("useSSL") === "true" ? dbSslConfig() : undefined
     };
   }
   return {
@@ -763,8 +1096,21 @@ function parseDbConfig() {
     user: process.env.DB_USER || "tornos_app",
     password: process.env.DB_PASSWORD || "",
     charset: "utf8mb4",
-    ssl: String(process.env.DB_SSL || "false").toLowerCase() === "true" ? { rejectUnauthorized: false } : undefined
+    ssl: String(process.env.DB_SSL || "false").toLowerCase() === "true" ? dbSslConfig() : undefined
   };
+}
+
+function dbSslConfig() {
+  const rejectUnauthorized = String(process.env.DB_SSL_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
+  const caFile = process.env.DB_SSL_CA_FILE;
+  return {
+    rejectUnauthorized,
+    ...(caFile ? { ca: fsSyncRead(caFile) } : {})
+  };
+}
+
+function fsSyncRead(filePath) {
+  return readFileSync(path.resolve(projectRoot, filePath), "utf8");
 }
 
 async function ensureDatabase() {
@@ -833,7 +1179,7 @@ async function bootstrapAdmin() {
   if (!existing) {
     const hash = await bcrypt.hash(config.adminPassword, config.bcryptStrength);
     const result = await exec(
-      "INSERT INTO users (username, password_hash, display_name, active) VALUES (?, ?, ?, TRUE)",
+      "INSERT INTO users (username, password_hash, display_name, active, locked, failed_attempts, password_changed_at) VALUES (?, ?, ?, TRUE, FALSE, 0, CURRENT_TIMESTAMP(6))",
       [config.adminUsername, hash, config.adminDisplayName]
     );
     await exec("INSERT INTO user_roles (user_id, role) VALUES (?, 'ADMIN'), (?, 'OPERADOR')", [result.insertId, result.insertId]);
@@ -841,9 +1187,244 @@ async function bootstrapAdmin() {
   }
   if (config.adminResetPassword) {
     const hash = await bcrypt.hash(config.adminPassword, config.bcryptStrength);
-    await exec("UPDATE users SET password_hash = ?, display_name = ?, active = TRUE WHERE id = ?", [hash, config.adminDisplayName, existing.id]);
+    await exec(
+      "UPDATE users SET password_hash = ?, display_name = ?, active = TRUE, locked = FALSE, failed_attempts = 0, password_changed_at = CURRENT_TIMESTAMP(6) WHERE id = ?",
+      [hash, config.adminDisplayName, existing.id]
+    );
   }
   await exec("INSERT IGNORE INTO user_roles (user_id, role) VALUES (?, 'ADMIN'), (?, 'OPERADOR')", [existing.id, existing.id]);
+}
+
+async function listPerfilesUsuario() {
+  const rows = await all(
+    `SELECT p.id, p.codigo, p.nombre, p.descripcion, p.activo,
+            DATE_FORMAT(p.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
+            DATE_FORMAT(p.updated_at, '%Y-%m-%dT%H:%i:%s') AS updatedAt,
+            COUNT(ur.user_id) AS usuariosAsignados
+       FROM perfiles_usuario p
+       LEFT JOIN user_roles ur ON ur.role = p.codigo
+      GROUP BY p.id, p.codigo, p.nombre, p.descripcion, p.activo, p.created_at, p.updated_at
+      ORDER BY p.activo DESC, p.nombre ASC`
+  );
+  return rows.map(row => ({
+    ...row,
+    activo: Boolean(row.activo),
+    usuariosAsignados: Number(row.usuariosAsignados || 0)
+  }));
+}
+
+async function getPerfilUsuario(codigo) {
+  const perfil = (await listPerfilesUsuario()).find(row => row.codigo === codigo);
+  if (!perfil) throw httpError(404, "Perfil no encontrado");
+  return perfil;
+}
+
+async function listUsuariosAjustes() {
+  const rows = await all(
+    `SELECT u.id, u.username, u.display_name AS displayName, u.email, u.active, u.locked,
+            u.failed_attempts AS failedAttempts,
+            DATE_FORMAT(u.password_changed_at, '%Y-%m-%dT%H:%i:%s') AS passwordChangedAt,
+            DATE_FORMAT(u.last_login_at, '%Y-%m-%dT%H:%i:%s') AS lastLoginAt,
+            DATE_FORMAT(u.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
+            GROUP_CONCAT(ur.role ORDER BY ur.role SEPARATOR ',') AS rolesText
+       FROM users u
+       LEFT JOIN user_roles ur ON ur.user_id = u.id
+      GROUP BY u.id, u.username, u.display_name, u.email, u.active, u.locked, u.failed_attempts,
+               u.password_changed_at, u.last_login_at, u.created_at
+      ORDER BY u.active DESC, u.username ASC`
+  );
+  return rows.map(row => ({
+    id: row.id,
+    username: row.username,
+    displayName: row.displayName,
+    email: row.email,
+    active: Boolean(row.active),
+    locked: Boolean(row.locked),
+    failedAttempts: Number(row.failedAttempts || 0),
+    passwordChangedAt: row.passwordChangedAt,
+    lastLoginAt: row.lastLoginAt,
+    createdAt: row.createdAt,
+    roles: row.rolesText ? row.rolesText.split(",").filter(Boolean) : []
+  }));
+}
+
+async function getUsuarioAjustes(id) {
+  const user = (await listUsuariosAjustes()).find(row => Number(row.id) === Number(id));
+  if (!user) throw httpError(404, "Usuario no encontrado");
+  return user;
+}
+
+async function listProfileAccess() {
+  const rows = await all(
+    `SELECT perfil_codigo AS perfilCodigo, modulo, can_view AS canView, can_create AS canCreate,
+            can_update AS canUpdate, can_delete AS canDelete, can_import AS canImport, can_export AS canExport
+       FROM perfil_accesos
+      ORDER BY perfil_codigo ASC, modulo ASC`
+  );
+  const grouped = {};
+  for (const row of rows) {
+    grouped[row.perfilCodigo] ||= {};
+    grouped[row.perfilCodigo][row.modulo] = accessDto(row);
+  }
+  return grouped;
+}
+
+async function insertDefaultProfileAccess(codigo) {
+  const normalizedCode = profileCode(codigo);
+  const defaults = normalizeProfileAccess(normalizedCode, []);
+  for (const acceso of defaults) {
+    await exec(
+      `INSERT IGNORE INTO perfil_accesos
+        (perfil_codigo, modulo, can_view, can_create, can_update, can_delete, can_import, can_export)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        normalizedCode,
+        acceso.modulo,
+        acceso.canView,
+        acceso.canCreate,
+        acceso.canUpdate,
+        acceso.canDelete,
+        acceso.canImport,
+        acceso.canExport
+      ]
+    );
+  }
+}
+
+async function userAccess(userId) {
+  const roles = await userRoles(userId);
+  return accessForRoles(roles);
+}
+
+async function accessForRoles(roles) {
+  const normalizedRoles = roles.map(profileCode).filter(Boolean);
+  if (!normalizedRoles.length) return {};
+  const rows = await all(
+    `SELECT modulo,
+            MAX(can_view) AS canView,
+            MAX(can_create) AS canCreate,
+            MAX(can_update) AS canUpdate,
+            MAX(can_delete) AS canDelete,
+            MAX(can_import) AS canImport,
+            MAX(can_export) AS canExport
+       FROM perfil_accesos
+      WHERE perfil_codigo IN (${placeholders(normalizedRoles)})
+      GROUP BY modulo`,
+    normalizedRoles
+  );
+  const access = {};
+  for (const row of rows) {
+    access[row.modulo] = accessDto(row);
+  }
+  if (normalizedRoles.includes("ADMIN")) {
+    for (const item of ACCESS_CATALOG) access[item.id] ||= defaultAccess(true);
+  }
+  return access;
+}
+
+function normalizeProfileAccess(codigo, accesos = []) {
+  const byModule = new Map(Array.isArray(accesos) ? accesos.map(item => [String(item.modulo || ""), item]) : []);
+  return ACCESS_CATALOG.map(item => {
+    const source = byModule.get(item.id) || {};
+    const isAdmin = codigo === "ADMIN";
+    const allowedByDefault = isAdmin || item.id !== "ajustes";
+    return {
+      modulo: item.id,
+      ...Object.fromEntries(ACCESS_ACTION_KEYS.map(key => [key, bool(source[key], allowedByDefault)]))
+    };
+  });
+}
+
+function accessDto(row) {
+  return {
+    canView: Boolean(row.canView),
+    canCreate: Boolean(row.canCreate),
+    canUpdate: Boolean(row.canUpdate),
+    canDelete: Boolean(row.canDelete),
+    canImport: Boolean(row.canImport),
+    canExport: Boolean(row.canExport)
+  };
+}
+
+function defaultAccess(value) {
+  return Object.fromEntries(ACCESS_ACTION_KEYS.map(key => [key, value]));
+}
+
+async function refreshAccessSessionsForRole(role) {
+  const targetRole = profileCode(role);
+  for (const session of sessions.values()) {
+    if (session.roles?.some(item => profileCode(item) === targetRole)) {
+      session.access = await accessForRoles(session.roles);
+    }
+  }
+}
+
+async function validatedProfileCodes(value) {
+  const profiles = await listPerfilesUsuario();
+  const validCodes = new Set(profiles.map(profile => profile.codigo));
+  const rawRoles = Array.isArray(value) ? value : String(value || "").split(",");
+  const roles = [...new Set(rawRoles.map(profileCode).filter(Boolean))];
+  if (!roles.length) {
+    const fallback = profiles.find(profile => profile.codigo === "OPERADOR" && profile.activo) || profiles.find(profile => profile.activo);
+    if (fallback) roles.push(fallback.codigo);
+  }
+  if (!roles.length) throw httpError(400, "Selecciona al menos un perfil");
+  for (const role of roles) {
+    if (!validCodes.has(role)) throw httpError(400, `Perfil no valido: ${role}`);
+  }
+  return roles;
+}
+
+async function ensureAdminAccountRemains(userId, nextActive, nextRoles) {
+  if (nextActive && nextRoles.includes("ADMIN")) return;
+  const row = await one(
+    `SELECT COUNT(DISTINCT u.id) AS total
+       FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+      WHERE u.active = TRUE
+        AND ur.role = 'ADMIN'
+        AND u.id <> ?`,
+    [userId]
+  );
+  if (Number(row?.total || 0) <= 0) {
+    throw httpError(400, "Debe existir al menos un usuario activo con perfil ADMIN");
+  }
+}
+
+function dropUserSessions(userId, keepToken = null) {
+  for (const [token, session] of sessions.entries()) {
+    if (Number(session.id) === Number(userId) && token !== keepToken) {
+      sessions.delete(token);
+    }
+  }
+}
+
+function dropRoleSessions(role) {
+  const targetRole = profileCode(role);
+  for (const [token, session] of sessions.entries()) {
+    if (session.roles?.some(item => profileCode(item) === targetRole)) {
+      sessions.delete(token);
+    }
+  }
+}
+
+function profileCode(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+}
+
+function requiredPassword(value) {
+  const password = String(value || "");
+  if (password.length < 8) throw httpError(400, "El password debe tener al menos 8 caracteres");
+  if (!/[A-Z]/.test(password)) throw httpError(400, "El password debe incluir al menos una mayuscula");
+  if (!/[a-z]/.test(password)) throw httpError(400, "El password debe incluir al menos una minuscula");
+  if (!/[\/&%$#".]/.test(password)) throw httpError(400, "El password debe incluir al menos un signo: / & % $ # \" .");
+  return password;
 }
 
 async function listPiezas() {
@@ -854,10 +1435,16 @@ async function listPiezas() {
             DATE_FORMAT(p.fecha_requerimiento, '%Y-%m-%d') AS fechaRequerimiento,
             DATE_FORMAT(p.fecha_compromiso, '%Y-%m-%d') AS fechaCompromiso,
             p.entregado, p.archivo, p.no_dibujo AS noDibujo, p.no_parte AS noParte, p.precio,
+            COALESCE(ti.tiempo_invertido, 0) AS tiempoInvertido,
             p.moneda_precio AS monedaPrecio, p.tipo_cambio_usd_mxn AS tipoCambioUsdMxn, p.material, p.tratamiento
        FROM piezas p
        JOIN clientes c ON c.id = p.cliente_id
        JOIN estatus_produccion e ON e.id = p.estatus_id
+       LEFT JOIN (
+         SELECT pieza_id, SUM(minutos) AS tiempo_invertido
+           FROM tiempos_produccion
+          GROUP BY pieza_id
+       ) ti ON ti.pieza_id = p.id
       ORDER BY p.id DESC`
   );
   return rows.map(piezaDto);
@@ -876,6 +1463,7 @@ function piezaDto(row) {
   return {
     ...row,
     entregado: Boolean(row.entregado),
+    tiempoInvertido: Number(row.tiempoInvertido || 0),
     precio,
     tipoCambioUsdMxn: tipoCambio,
     precioMxn: moneda === "USD" ? round2(precio * tipoCambio) : round2(precio)
@@ -883,6 +1471,22 @@ function piezaDto(row) {
 }
 
 function normalizePieza(body) {
+  body = validateFields(body, {
+    clienteId: { type: "id", required: true, message: "Cliente requerido" },
+    estatusId: { type: "id", required: true, message: "Estatus requerido" },
+    ordenCompra: { type: "string", max: 80 },
+    descripcion: { type: "string", required: true, max: 500, message: "Descripcion requerida" },
+    cantidad: { type: "number", min: 0.01 },
+    cantidadEntregada: { type: "number", min: 0, default: 0 },
+    fechaRequerimiento: { type: "date" },
+    fechaCompromiso: { type: "date", required: true, message: "Fecha compromiso requerida" },
+    archivo: { type: "string", max: 300 },
+    noDibujo: { type: "string", max: 120 },
+    noParte: { type: "string", max: 120 },
+    precio: { type: "number", min: 0, default: 0 },
+    material: { type: "string", max: 200 },
+    tratamiento: { type: "string", max: 200 }
+  });
   const moneda = String(body.monedaPrecio || "MXN").toUpperCase();
   if (!["MXN", "USD"].includes(moneda)) throw httpError(400, "La moneda del precio debe ser MXN o USD");
   const tipoCambio = moneda === "USD" ? num(body.tipoCambioUsdMxn, 0) : 1;
@@ -1009,6 +1613,7 @@ async function listRequisiciones() {
 async function listOrdenesCompra() {
   const ordenes = await all(
     `SELECT oc.id, oc.folio, oc.proveedor_id AS proveedorId, p.nombre_proveedor AS proveedorNombre, p.rfc AS proveedorRfc,
+            p.direccion_fiscal AS proveedorDireccion, p.ciudad AS proveedorCiudad, p.telefono AS proveedorTelefono,
             p.contacto AS proveedorContacto, DATE_FORMAT(oc.fecha, '%Y-%m-%dT%H:%i:%s') AS fecha, oc.moneda,
             oc.observaciones, oc.created_by AS createdBy, oc.subtotal, oc.iva, oc.retencion_iva_pct AS retencionIvaPct,
             oc.retencion_isr_pct AS retencionIsrPct, oc.retencion_iva AS retencionIva, oc.retencion_isr AS retencionIsr,
@@ -1018,11 +1623,12 @@ async function listOrdenesCompra() {
       ORDER BY oc.fecha DESC`
   );
   const detalles = await all(
-    `SELECT id, orden_compra_id AS ordenCompraId, requisicion_detalle_id AS requisicionDetalleId,
-            requisicion_folio AS requisicionFolio, cantidad, descripcion, destino, material, unidad_medida AS unidadMedida,
-            precio_unitario AS precioUnitario, subtotal
-       FROM orden_compra_detalles
-      ORDER BY id ASC`
+    `SELECT ocd.id, ocd.orden_compra_id AS ordenCompraId, ocd.requisicion_detalle_id AS requisicionDetalleId,
+            ocd.requisicion_folio AS requisicionFolio, ocd.cantidad, ocd.descripcion, ocd.destino, ocd.material,
+            ocd.unidad_medida AS unidadMedida, ocd.precio_unitario AS precioUnitario, ocd.subtotal, rd.pieza_id AS piezaId
+       FROM orden_compra_detalles ocd
+       LEFT JOIN requisicion_detalles rd ON rd.id = ocd.requisicion_detalle_id
+      ORDER BY ocd.id ASC`
   );
   const byOrden = groupBy(detalles, "ordenCompraId");
   return ordenes.map(orden => ({ ...orden, cancelado: Boolean(orden.cancelado), detalles: byOrden.get(String(orden.id)) || [] }));
@@ -1054,9 +1660,10 @@ async function listFacturas() {
 }
 
 async function almacenMovimiento(req, tipo) {
-  const articuloId = Number(req.body.articuloId);
-  const cantidad = num(req.body.cantidad, 0);
-  const precioUnitario = num(req.body.precioUnitario, 0);
+  const body = validateAlmacenMovimientoBody(req.body);
+  const articuloId = body.articuloId;
+  const cantidad = body.cantidad;
+  const precioUnitario = body.precioUnitario;
   if (cantidad <= 0) throw httpError(400, "La cantidad debe ser mayor a cero");
   const conn = await pool.getConnection();
   try {
@@ -1070,7 +1677,7 @@ async function almacenMovimiento(req, tipo) {
     const [result] = await conn.query(
       `INSERT INTO kardex_movimientos (articulo_id, fecha, tipo, cantidad, precio_unitario, total, referencia, usuario_sistema, observaciones)
        VALUES (?, NOW(6), ?, ?, ?, ?, ?, ?, ?)`,
-      [articuloId, tipo, cantidad, precioUnitario, total, emptyToNull(req.body.referencia), req.user.username, emptyToNull(req.body.observaciones)]
+      [articuloId, tipo, cantidad, precioUnitario, total, emptyToNull(body.referencia), req.user.username, emptyToNull(body.observaciones)]
     );
     await conn.commit();
     await audit(req.user.username, `ALMACEN_${tipo}`, `Articulo ${articuloId}`);
@@ -1117,7 +1724,23 @@ async function getOperador(id) {
   return { ...row, activo: Boolean(row.activo), supervisor: Boolean(row.supervisor), chofer: Boolean(row.chofer) };
 }
 
+function validateClienteBody(body) {
+  return validateFields(body, {
+    nombreCliente: { type: "string", required: true, max: 140, message: "Nombre de cliente requerido" },
+    calle: { type: "string", max: 200 },
+    colonia: { type: "string", max: 120 },
+    municipio: { type: "string", max: 120 },
+    estado: { type: "string", max: 120 },
+    rfc: { type: "string", max: 20 },
+    cp: { type: "string", max: 12 },
+    razonSocial: { type: "string", max: 160 },
+    formatoFactura: { type: "boolean", default: true },
+    activo: { type: "boolean", default: true }
+  });
+}
+
 function proveedorParams(body) {
+  body = validateProveedorBody(body);
   return [
     required(body.nombreProveedor, "Nombre de proveedor requerido"),
     emptyToNull(body.razonSocial),
@@ -1145,6 +1768,7 @@ function proveedorParams(body) {
 }
 
 function operadorParams(body) {
+  body = validateOperadorBody(body);
   return [
     required(body.nombreOperador, "Nombre de operador requerido"),
     num(body.turno, 0),
@@ -1154,43 +1778,318 @@ function operadorParams(body) {
   ];
 }
 
+function validateProveedorBody(body) {
+  return validateFields(body, {
+    nombreProveedor: { type: "string", required: true, max: 160, message: "Nombre de proveedor requerido" },
+    razonSocial: { type: "string", max: 180 },
+    representanteLegal: { type: "string", max: 160 },
+    direccionFiscal: { type: "string", max: 240 },
+    ciudad: { type: "string", max: 120 },
+    rfc: { type: "string", max: 20 },
+    calle: { type: "string", max: 200 },
+    colonia: { type: "string", max: 120 },
+    municipio: { type: "string", max: 120 },
+    estado: { type: "string", max: 120 },
+    cp: { type: "string", max: 12 },
+    telefono: { type: "string", max: 60 },
+    fax: { type: "string", max: 60 },
+    contacto: { type: "string", max: 160 },
+    correo: { type: "string", max: 160 },
+    condicionesPago: { type: "string", max: 120 },
+    banco: { type: "string", max: 120 },
+    clabe: { type: "string", max: 40 },
+    numeroCuenta: { type: "string", max: 40 },
+    retencionIvaPct: { type: "number", min: 0, max: 100, default: 0 },
+    retencionIsrPct: { type: "number", min: 0, max: 100, default: 0 },
+    activo: { type: "boolean", default: true }
+  });
+}
+
+function validateOperadorBody(body) {
+  return validateFields(body, {
+    nombreOperador: { type: "string", required: true, max: 120, message: "Nombre de operador requerido" },
+    turno: { type: "number", min: 0, max: 9, default: 0 },
+    activo: { type: "boolean", default: true },
+    supervisor: { type: "boolean", default: false },
+    chofer: { type: "boolean", default: false }
+  });
+}
+
+function validateOrdenTrabajoBody(body) {
+  const output = validateFields(body, {
+    clienteId: { type: "id", required: true, message: "Cliente requerido" },
+    ordenCompra: { type: "string", required: true, max: 80, message: "Orden de compra requerida" },
+    fechaCompromiso: { type: "date", required: true, message: "Fecha compromiso requerida" },
+    observaciones: { type: "string", max: 500 }
+  });
+  output.piezaIds = validateIdArray(body?.piezaIds, "piezas");
+  return output;
+}
+
+function validateTiempoBody(body) {
+  return validateFields(body, {
+    piezaId: { type: "id", required: true, message: "Pieza requerida" },
+    operadorId: { type: "id", required: true, message: "Operador requerido" },
+    estatusId: { type: "id", required: true, message: "Estatus requerido" },
+    descripcionOperacion: { type: "string", required: true, max: 180, message: "Operacion requerida" },
+    inicio: { type: "datetime", required: true, message: "Inicio requerido" },
+    fin: { type: "datetime", required: true, message: "Fin requerido" }
+  });
+}
+
+function validateRequisicionBody(body) {
+  const output = validateFields(body, {
+    solicitante: { type: "string", required: true, max: 120, message: "Solicitante requerido" },
+    prioridad: { type: "string", max: 40, default: "Normal" },
+    autorizacion: { type: "string", max: 120 },
+    observaciones: { type: "string", max: 500 }
+  });
+  output.detalles = validateArray(body?.detalles, "detalles").map(detalle => validateFields(detalle, {
+    piezaId: { type: "id" },
+    cantidad: { type: "number", min: 0.01, default: 1 },
+    descripcion: { type: "string", required: true, max: 500, message: "Descripcion requerida" },
+    destino: { type: "string", max: 180 },
+    material: { type: "string", max: 180 },
+    unidadMedida: { type: "string", max: 40 },
+    precio: { type: "number", min: 0 }
+  }));
+  return output;
+}
+
+function validateOrdenCompraBody(body) {
+  const output = validateFields(body, {
+    proveedorId: { type: "id", required: true, message: "Proveedor requerido" },
+    moneda: { type: "string", max: 40, default: "Moneda Nacional" },
+    observaciones: { type: "string", max: 500 },
+    retencionIvaPct: { type: "number", min: 0, max: 100 },
+    retencionIsrPct: { type: "number", min: 0, max: 100 }
+  });
+  output.detalles = validateArray(body?.detalles, "detalles").map(detalle => validateFields(detalle, {
+    requisicionDetalleId: { type: "id" },
+    requisicionFolio: { type: "id" },
+    cantidad: { type: "number", min: 0.01, default: 1 },
+    descripcion: { type: "string", required: true, max: 500, message: "Descripcion requerida" },
+    destino: { type: "string", max: 180 },
+    material: { type: "string", max: 180 },
+    unidadMedida: { type: "string", max: 40 },
+    precioUnitario: { type: "number", min: 0, default: 0 }
+  }));
+  return output;
+}
+
+function validateAlmacenArticuloBody(body) {
+  return validateFields(body, {
+    descripcion: { type: "string", required: true, max: 180, message: "Articulo requerido" },
+    medida: { type: "string", max: 40 },
+    existencia: { type: "number", min: 0, default: 0 },
+    minimo: { type: "number", min: 0, default: 0 },
+    maximo: { type: "number", min: 0, default: 0 },
+    puntoReorden: { type: "number", min: 0, default: 0 },
+    activo: { type: "boolean", default: true }
+  });
+}
+
+function validateAlmacenMovimientoBody(body) {
+  return validateFields(body, {
+    articuloId: { type: "id", required: true, message: "Articulo requerido" },
+    cantidad: { type: "number", min: 0.01, message: "Cantidad requerida" },
+    precioUnitario: { type: "number", min: 0, default: 0 },
+    referencia: { type: "string", max: 120 },
+    observaciones: { type: "string", max: 500 }
+  });
+}
+
+function validateRemisionBody(body) {
+  return validateFields(body, {
+    piezaId: { type: "id", required: true, message: "Pieza requerida" },
+    cantidadEntregada: { type: "number", min: 0.01, message: "Cantidad requerida" },
+    folio: { type: "string", max: 80 },
+    observaciones: { type: "string", max: 500 },
+    autorizacion: { type: "string", max: 120 },
+    chofer: { type: "string", max: 120 }
+  });
+}
+
+function validateFacturaBody(body) {
+  return validateFields(body, {
+    remisionId: { type: "id" },
+    clienteId: { type: "id" },
+    serie: { type: "string", max: 20 },
+    folio: { type: "string", required: true, max: 80, message: "Folio de factura requerido" },
+    subtotal: { type: "number", min: 0, default: 0 },
+    iva: { type: "number", min: 0 },
+    total: { type: "number", min: 0 },
+    estatus: { type: "string", max: 80, default: "Pendiente" },
+    uuid: { type: "string", max: 80 },
+    observaciones: { type: "string", max: 500 }
+  });
+}
+
+function validateArray(value, field) {
+  if (!Array.isArray(value) || !value.length) throw httpError(400, `Agrega al menos un elemento en ${field}`);
+  return value;
+}
+
+function validateIdArray(value, field) {
+  return validateArray(value, field).map(Number).filter(Number.isInteger).filter(id => id > 0);
+}
+
 function requisicionLines(requisicion) {
-  return documentLines("REQUISICION DE MATERIAL", requisicion.folio, [
-    ["Datos generales", [
-      fieldLine("Solicitante", requisicion.solicitante),
-      fieldLine("Autorizado por", requisicion.autorizacion),
-      fieldLine("Prioridad", requisicion.prioridad),
-      fieldLine("Fecha", requisicion.fecha),
-      fieldLine("Usuario", requisicion.usuarioSolicitante)
-    ]],
-    ["Partidas", requisicion.detalles.map((detalle, index) =>
-      `${index + 1}. Pieza ${detalle.piezaId || "-"} | ${detalle.cantidad} ${detalle.unidadMedida || ""} | ${detalle.material || "-"} | ${detalle.descripcion} | Destino ${detalle.destino || "-"}`
-    )],
-    ["Observaciones", [requisicion.observaciones || "Sin observaciones"]],
-    ["Firmas", ["Solicito: ____________________", "Autorizo: ____________________"]]
-  ]);
+  const width = 99;
+  const separator = "-".repeat(width);
+  const tableSeparator = "+------+------------------------------------+----------+------------------+--------------+--------+";
+  const lines = [
+    leftRightBox("TORNOS SA DE CV", "REQUISICION DE MATERIAL", "FECHA", formatPurchaseOrderDate(requisicion.fecha), width),
+    rightText("Requisicion", requisicion.folio, width),
+    "",
+    `Solicitante: ${String(requisicion.solicitante || "-").toUpperCase()}`,
+    `Autorizado por: ${requisicion.autorizacion || "-"}`,
+    `Prioridad: ${requisicion.prioridad || "-"}`,
+    separator,
+    "REQUISICION DE MATERIAL",
+    separator,
+    tableSeparator,
+    requisitionRow(["CANT", "DESCRIPCION", "MEDIDA", "DESTINO", "MATERIAL", "IDPIEZA"]),
+    tableSeparator
+  ];
+
+  requisicion.detalles.forEach(detalle => {
+    lines.push(requisitionRow([
+      numberText(detalle.cantidad),
+      detalle.descripcion || "-",
+      detalle.unidadMedida || "-",
+      detalle.destino || "-",
+      detalle.material || "-",
+      detalle.piezaId || "-"
+    ]));
+  });
+
+  lines.push(tableSeparator);
+
+  if (requisicion.observaciones) {
+    lines.push("", `Observaciones: ${requisicion.observaciones}`);
+  }
+
+  return lines;
+}
+
+function centeredText(value, width) {
+  const text = String(value ?? "");
+  const leftPadding = Math.max(Math.floor((width - text.length) / 2), 0);
+  return `${" ".repeat(leftPadding)}${text}`;
+}
+
+function leftRightBox(leftTitle, leftValue, rightTitle, rightValue, width) {
+  const left = `${leftTitle}: ${leftValue || "-"}`;
+  const right = `${rightTitle}: ${rightValue || "-"}`;
+  const space = Math.max(width - left.length - right.length, 1);
+  return `${left}${" ".repeat(space)}${right}`;
+}
+
+function rightText(label, value, width) {
+  const text = `${label}: ${value || "-"}`;
+  return text.padStart(width, " ");
+}
+
+function fieldColumns(leftLabel, leftValue, rightLabel, rightValue, width) {
+  const left = `${leftLabel}: ${leftValue == null || leftValue === "" ? "-" : leftValue}`;
+  const right = `${rightLabel}: ${rightValue == null || rightValue === "" ? "-" : rightValue}`;
+  const space = Math.max(width - left.length - right.length, 2);
+  return `${left}${" ".repeat(space)}${right}`;
+}
+
+function purchaseOrderRow(values) {
+  const widths = [5, 7, 7, 27, 8, 6, 9, 9];
+  return `|${values.map((value, index) => fitCell(value, widths[index], index === 0 || index >= 6 ? "right" : "left")).join("|")}|`;
+}
+
+function requisitionRow(values) {
+  const widths = [6, 36, 10, 18, 14, 8];
+  return `|${values.map((value, index) => fitCell(value, widths[index], index === 0 ? "right" : "left")).join("|")}|`;
+}
+
+function remisionRow(values) {
+  const widths = [5, 8, 30, 12, 11, 11, 11];
+  return `|${values.map((value, index) => fitCell(value, widths[index], index === 0 || index === 1 || index >= 4 ? "right" : "left")).join("|")}|`;
+}
+
+function fitCell(value, width, align = "left") {
+  const text = String(value ?? "-").replace(/\s+/g, " ").trim();
+  const output = text.length > width ? text.slice(0, Math.max(width - 1, 0)) + "." : text;
+  return align === "right" ? output.padStart(width, " ") : output.padEnd(width, " ");
+}
+
+function totalLine(label, value, width) {
+  const amount = money(value);
+  const text = `${label}: ${amount}`;
+  return text.padStart(width, " ");
+}
+
+function numberText(value) {
+  const number = Number(value || 0);
+  return Number.isInteger(number) ? String(number) : String(round2(number));
+}
+
+function formatPurchaseOrderDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || "-";
+  return date.toLocaleString("es-MX", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function ordenCompraLines(orden) {
-  return documentLines("ORDEN DE COMPRA", orden.folio, [
-    ["Datos del proveedor", [
-      fieldLine("Proveedor", orden.proveedorNombre),
-      fieldLine("RFC", orden.proveedorRfc),
-      fieldLine("Contacto", orden.proveedorContacto),
-      fieldLine("Fecha", orden.fecha),
-      fieldLine("Moneda", orden.moneda)
-    ]],
-    ["Partidas", orden.detalles.map((d, index) =>
-      `${index + 1}. Req ${d.requisicionFolio || "-"} | ${d.cantidad} ${d.unidadMedida || ""} | ${d.descripcion} | ${money(d.precioUnitario)} | ${money(d.subtotal)}`
-    )],
-    ["Totales", [
-      fieldLine("Subtotal", money(orden.subtotal)),
-      fieldLine("IVA", money(orden.iva)),
-      fieldLine("Retenciones", money(Number(orden.retencionIva || 0) + Number(orden.retencionIsr || 0))),
-      fieldLine("Total", money(orden.total))
-    ]],
-    ["Observaciones", [orden.observaciones || "Sin observaciones"]]
-  ]);
+  const width = 100;
+  const separator = "-".repeat(width);
+  const tableSeparator = "+-----+-------+-------+---------------------------+--------+------+---------+---------+";
+  const retenciones = Number(orden.retencionIva || 0) + Number(orden.retencionIsr || 0);
+  const proveedorDireccion = [orden.proveedorDireccion, orden.proveedorCiudad].filter(Boolean).join(", ");
+  const lines = [
+    leftRightBox("FECHA", formatPurchaseOrderDate(orden.fecha), "FOLIO", orden.folio, width),
+    centeredText("ORDEN DE COMPRA", width),
+    ...(orden.cancelado ? [centeredText("CANCELADA", width)] : []),
+    separator,
+    centeredText("Datos del Proveedor", width),
+    fieldColumns("Nombre", orden.proveedorNombre, "RFC", orden.proveedorRfc, width),
+    fieldColumns("Direccion", proveedorDireccion || "-", "Contacto", orden.proveedorContacto || "-", width),
+    fieldColumns("Ciudad", orden.proveedorCiudad || "-", "Tel", orden.proveedorTelefono || "-", width),
+    fieldLine("Moneda", orden.moneda || "Moneda Nacional"),
+    separator,
+    tableSeparator,
+    purchaseOrderRow(["CANT.", "REQ.", "MEDIDA", "DESCRIPCION", "MATERIAL", "PIEZA", "PRECIO", "SUBTOTAL"]),
+    tableSeparator
+  ];
+
+  orden.detalles.forEach(detalle => {
+    lines.push(purchaseOrderRow([
+      numberText(detalle.cantidad),
+      detalle.requisicionFolio || "-",
+      detalle.unidadMedida || "-",
+      detalle.descripcion || "-",
+      detalle.material || "-",
+      detalle.piezaId || "-",
+      money(detalle.precioUnitario),
+      money(detalle.subtotal)
+    ]));
+  });
+
+  lines.push(
+    tableSeparator,
+    totalLine("SUBTOTAL", orden.subtotal, width),
+    totalLine("IVA", orden.iva, width),
+    ...(retenciones > 0 ? [totalLine("RETENCIONES", retenciones, width)] : []),
+    totalLine("Total", orden.total, width)
+  );
+
+  if (orden.observaciones) {
+    lines.push(separator, `Observaciones: ${orden.observaciones}`);
+  }
+
+  return lines;
 }
 
 function ordenTrabajoLines(orden, piezas) {
@@ -1237,31 +2136,66 @@ function piezaDocumentLines(pieza, notas, estimaciones) {
 }
 
 function remisionLines(remision, pieza, notas) {
-  return documentLines("REMISION", remision.folio, [
-    ["Datos de entrega", [
-      fieldLine("Cliente", remision.clienteNombre),
-      fieldLine("Fecha", remision.fecha),
-      fieldLine("Pieza", remision.piezaId),
-      fieldLine("Cantidad entregada", remision.cantidadEntregada),
-      fieldLine("Chofer", remision.chofer),
-      fieldLine("Autorizacion", remision.autorizacion)
-    ]],
-    ["Datos tecnicos", [
-      fieldLine("Orden de compra", pieza.ordenCompra),
-      fieldLine("Orden de trabajo", pieza.ordenTrabajoId || "Sin OT"),
-      fieldLine("No. parte", pieza.noParte),
-      fieldLine("No. dibujo", pieza.noDibujo),
-      fieldLine("Descripcion", pieza.descripcion),
-      fieldLine("Material", pieza.material),
-      fieldLine("Tratamiento", pieza.tratamiento),
-      fieldLine("Archivo", pieza.archivo)
-    ]],
-    ["Notas recientes", notas.length
-      ? notas.slice(0, 5).map(nota => `${nota.createdAt} | ${nota.estatus || "Sin estatus"} | ${nota.nota}`)
-      : ["Sin notas registradas"]],
-    ["Observaciones", [remision.observaciones || "Sin observaciones"]],
-    ["Firmas", ["Entrego: ____________________", "Recibio: ____________________"]]
-  ]);
+  const width = 105;
+  const separator = "-".repeat(width);
+  const tableSeparator = "+-----+--------+------------------------------+------------+-----------+-----------+-----------+";
+  const pendiente = Math.max(0, Number(pieza.cantidad || 0) - Number(pieza.cantidadEntregada || 0));
+  const precioUnitario = Number(pieza.precioMxn || pieza.precio || 0);
+  const subtotal = round2(precioUnitario * Number(remision.cantidadEntregada || 0));
+  const iva = round2(subtotal * IVA_RATE);
+  const total = round2(subtotal + iva);
+  const lines = [
+    leftRightBox("TORNOS SA DE CV", "SISTEMA OPERATIVO TORNOS", "REMISION", remision.folio, width),
+    fieldLine("Fecha", formatPurchaseOrderDate(remision.fecha)),
+    separator,
+    centeredText("REMISION", width),
+    separator,
+    fieldColumns("Cliente", remision.clienteNombre, "Fecha Requerimiento", pieza.fechaRequerimiento || "-", width),
+    fieldColumns("Fecha Compromiso", pieza.fechaCompromiso || "-", "Orden de compra", pieza.ordenCompra || "-", width),
+    fieldColumns("No de Parte", pieza.noParte || "-", "No de Dibujo", pieza.noDibujo || "-", width),
+    fieldColumns("Cantidad", remision.cantidadEntregada, "Estatus", pieza.estatus || "-", width),
+    fieldColumns("Material", pieza.material || "-", "Tratamiento", pieza.tratamiento || "-", width),
+    fieldLine("Descripcion", pieza.descripcion || "-"),
+    separator,
+    tableSeparator,
+    remisionRow(["Linea", "Cantidad", "Descripcion", "Dibujo", "Precio Unit.", "Sub-Total", "Pendiente"]),
+    tableSeparator,
+    remisionRow([
+      1,
+      numberText(remision.cantidadEntregada),
+      pieza.descripcion || "-",
+      pieza.noDibujo || pieza.noParte || "-",
+      money(precioUnitario),
+      money(subtotal),
+      pendiente
+    ]),
+    tableSeparator
+  ];
+
+  lines.push(
+    fieldColumns("Chofer", remision.chofer || "-", "Autorizacion", remision.autorizacion || "-", width),
+    fieldColumns("Condiciones de pago", "Credito", "Sub-total", money(subtotal), width),
+    rightText("I.V.A.", money(iva), width),
+    rightText("Total", money(total), width)
+  );
+
+  if (pieza.archivo) lines.push(fieldLine("Archivo", pieza.archivo));
+
+  if (notas.length) {
+    lines.push(separator, "Notas recientes:");
+    notas.slice(0, 5).forEach(nota => lines.push(`${nota.createdAt} | ${nota.estatus || "Sin estatus"} | ${nota.nota}`));
+  }
+
+  lines.push(
+    separator,
+    `Observaciones: ${remision.observaciones || "Sin observaciones"}`,
+    "",
+    "Entrego: ______________________________      Recibio: ______________________________",
+    "",
+    "Nombre y firma                                      Nombre y firma"
+  );
+
+  return lines;
 }
 
 function facturaLines(factura) {
@@ -1308,15 +2242,21 @@ function dividerLine() {
   return "------------------------------------------------------------";
 }
 
-function sendPdf(res, filename, lines) {
+function sendPdf(res, filename, lines, options = {}) {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-  res.send(simplePdf(lines));
+  res.send(simplePdf(lines, options));
 }
 
-function simplePdf(lines) {
-  const safeLines = lines.flatMap(line => wrapAscii(line, 92));
-  const pageSize = 43;
+function simplePdf(lines, options = {}) {
+  const fontName = options.fontName || "Helvetica";
+  const fontSize = options.fontSize || 10;
+  const lineHeight = options.lineHeight || 16;
+  const left = options.left || 48;
+  const top = options.top || 760;
+  const wrapWidth = options.wrapWidth || 92;
+  const pageSize = options.pageSize || 43;
+  const safeLines = lines.flatMap(line => wrapAscii(line, wrapWidth));
   const pages = [];
   for (let index = 0; index < Math.max(safeLines.length, 1); index += pageSize) {
     pages.push(safeLines.slice(index, index + pageSize));
@@ -1331,13 +2271,13 @@ function simplePdf(lines) {
   pages.forEach((_, index) => {
     objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontObjectNumber} 0 R >> >> /Contents ${firstContentObjectNumber + index} 0 R >>`);
   });
-  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  objects.push(`<< /Type /Font /Subtype /Type1 /BaseFont /${fontName} >>`);
   pages.forEach(pageLines => {
     const stream = [
       "BT",
-      "/F1 10 Tf",
-      "48 760 Td",
-      ...pageLines.map((line, index) => `${index ? "0 -16 Td " : ""}(${escapePdf(line)}) Tj`),
+      `/F1 ${fontSize} Tf`,
+      `${left} ${top} Td`,
+      ...pageLines.map((line, index) => `${index ? `0 -${lineHeight} Td ` : ""}(${escapePdf(line)}) Tj`),
       "ET"
     ].join("\n");
     objects.push(`<< /Length ${Buffer.byteLength(stream)} >> stream\n${stream}\nendstream`);
@@ -1361,6 +2301,30 @@ function rtfDocument(lines) {
   return `{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}\\fs22 ${lines.map(line => `${rtfSafe(line)}\\par`).join("\n")}}`;
 }
 
+function securityHeaders(req, res, next) {
+  const connectSources = ["'self'", ...config.allowedOrigins].join(" ");
+  res.setHeader("Content-Security-Policy", [
+    "default-src 'self'",
+    `connect-src ${connectSources}`,
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'self'"
+  ].join("; "));
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "same-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (IS_PRODUCTION) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+}
+
 function corsHeaders(req, res, next) {
   const origin = req.headers.origin;
   if (origin && config.allowedOrigins.includes(origin)) {
@@ -1371,6 +2335,44 @@ function corsHeaders(req, res, next) {
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
+}
+
+function assertLoginAllowed(req, username) {
+  const key = loginKey(req, username);
+  const entry = loginAttempts.get(key);
+  if (!entry || entry.resetAt <= Date.now()) {
+    loginAttempts.delete(key);
+    return;
+  }
+  if (entry.count >= config.loginRateLimitMax) {
+    throw httpError(429, "Demasiados intentos de acceso. Intenta mas tarde.");
+  }
+}
+
+function recordFailedLogin(req, username) {
+  const key = loginKey(req, username);
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || entry.resetAt <= now) {
+    loginAttempts.set(key, { count: 1, resetAt: now + config.loginRateLimitWindowMs });
+    cleanupLoginAttempts(now);
+    return;
+  }
+  entry.count += 1;
+}
+
+function clearFailedLogin(req, username) {
+  loginAttempts.delete(loginKey(req, username));
+}
+
+function cleanupLoginAttempts(now = Date.now()) {
+  for (const [key, entry] of loginAttempts.entries()) {
+    if (entry.resetAt <= now) loginAttempts.delete(key);
+  }
+}
+
+function loginKey(req, username) {
+  return `${req.ip || req.socket?.remoteAddress || "unknown"}:${String(username || "").toLowerCase()}`;
 }
 
 function authRequired(req, res, next) {
@@ -1384,6 +2386,36 @@ function authRequired(req, res, next) {
   req.token = token;
   req.user = session;
   next();
+}
+
+function requireReadAccess(...moduleIds) {
+  return requireAnyReadAccess(...moduleIds);
+}
+
+function requireAnyReadAccess(...moduleIds) {
+  const requirements = [...new Set([...moduleIds, "dashboard", "reportes"])]
+    .filter(Boolean)
+    .map(moduleId => ({ moduleId, actionKey: "canView" }));
+  return requireAnyAccess(...requirements);
+}
+
+function requireAccess(moduleId, actionKey = "canView") {
+  return requireAnyAccess({ moduleId, actionKey });
+}
+
+function requireAnyAccess(...requirements) {
+  return (req, res, next) => {
+    if (req.user?.roles?.includes("ADMIN")) return next();
+    const allowed = requirements.some(({ moduleId, actionKey = "canView" }) => hasAccess(req.user, moduleId, actionKey));
+    if (!allowed) {
+      return res.status(403).json({ message: "No tienes permisos para esta accion" });
+    }
+    next();
+  };
+}
+
+function hasAccess(user, moduleId, actionKey) {
+  return Boolean(user?.access?.[moduleId]?.[actionKey]);
 }
 
 function asyncHandler(handler) {
@@ -1450,6 +2482,54 @@ function num(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function validateFields(body, schema) {
+  const source = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const output = { ...source };
+  for (const [field, rule] of Object.entries(schema)) {
+    const raw = source[field];
+    if (rule.required && (raw == null || String(raw).trim() === "")) {
+      throw httpError(400, rule.message || `${field} requerido`);
+    }
+    if (raw == null || raw === "") {
+      if ("default" in rule) output[field] = rule.default;
+      continue;
+    }
+    if (rule.type === "string") {
+      const value = String(raw).trim();
+      if (rule.max && value.length > rule.max) throw httpError(400, `${field} no puede exceder ${rule.max} caracteres`);
+      if (rule.pattern && !rule.pattern.test(value)) throw httpError(400, rule.patternMessage || `${field} no tiene formato valido`);
+      output[field] = value;
+    } else if (rule.type === "id") {
+      const value = Number(raw);
+      if (!Number.isInteger(value) || value <= 0) throw httpError(400, rule.message || `${field} debe ser un ID valido`);
+      output[field] = value;
+    } else if (rule.type === "number") {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) throw httpError(400, `${field} debe ser numerico`);
+      if (rule.min != null && value < rule.min) throw httpError(400, `${field} debe ser mayor o igual a ${rule.min}`);
+      if (rule.max != null && value > rule.max) throw httpError(400, `${field} debe ser menor o igual a ${rule.max}`);
+      output[field] = value;
+    } else if (rule.type === "boolean") {
+      output[field] = bool(raw, Boolean(rule.default));
+    } else if (rule.type === "date") {
+      const value = String(raw).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(new Date(`${value}T00:00:00`).getTime())) {
+        throw httpError(400, `${field} debe tener formato YYYY-MM-DD`);
+      }
+      output[field] = value;
+    } else if (rule.type === "datetime") {
+      const value = String(raw).trim();
+      if (Number.isNaN(new Date(value).getTime())) throw httpError(400, `${field} debe ser fecha/hora valida`);
+      output[field] = value;
+    } else if (rule.type === "enum") {
+      const value = String(raw).trim();
+      if (!rule.values.includes(value)) throw httpError(400, `${field} debe ser uno de: ${rule.values.join(", ")}`);
+      output[field] = value;
+    }
+  }
+  return output;
+}
+
 function round2(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
@@ -1491,6 +2571,11 @@ function migrationVersion(file) {
   return file.match(/^V(\d+)__/i)?.[1] || null;
 }
 
+function safeUploadExtension(filename) {
+  const extension = path.extname(String(filename || "")).toLowerCase();
+  return UPLOAD_EXTENSIONS.has(extension) ? extension : "";
+}
+
 function parseSize(value) {
   const match = String(value).trim().match(/^(\d+(?:\.\d+)?)(kb|mb|gb)?$/i);
   if (!match) return 25 * 1024 * 1024;
@@ -1500,6 +2585,19 @@ function parseSize(value) {
   if (unit === "mb") return number * 1024 * 1024;
   if (unit === "kb") return number * 1024;
   return number;
+}
+
+function validateProductionConfig() {
+  if (!IS_PRODUCTION) return;
+  if (!config.db.ssl) {
+    throw new Error("DB_SSL=true o DB_URL con useSSL=true es requerido en produccion.");
+  }
+  if (config.db.ssl.rejectUnauthorized === false) {
+    throw new Error("DB_SSL_REJECT_UNAUTHORIZED=false no esta permitido en produccion.");
+  }
+  if (!config.allowedOrigins.length) {
+    throw new Error("APP_ALLOWED_ORIGINS debe definirse en produccion.");
+  }
 }
 
 function wrapAscii(value, width) {

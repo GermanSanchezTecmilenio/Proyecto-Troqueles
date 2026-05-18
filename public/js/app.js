@@ -57,17 +57,29 @@ let requisicionMaterialOptions = [];
 let requisicionPartidas = [];
 let selectedRequisicionPartidaIndex = null;
 let selectedReportId = "diarioOperador";
+let currentReportExport = null;
+let currentSession = null;
+let currentAccess = {};
+let currentSettingsTab = "general";
+let selectedAccessProfileCode = "";
 const MENU_ICON_BASE = "/assets/menu-icons/";
+const ACCESS_ACTIONS = [
+  { key: "canView", label: "Ver" },
+  { key: "canCreate", label: "Alta" },
+  { key: "canUpdate", label: "Editar" },
+  { key: "canDelete", label: "Baja" },
+  { key: "canImport", label: "Importar" },
+  { key: "canExport", label: "Exportar" }
+];
 
 const moduleCards = {
   dashboard: { label: "Dashboard", detail: "KPIs y estatus operativo", icon: "DB", image: "dashboard.svg", tone: "blue" },
   catalogosMenu: { label: "Catalogos", detail: "Clientes, proveedores y operadores", icon: "CG", image: "catalogos.svg", tone: "teal" },
-  produccionMenu: { label: "Produccion", detail: "Actividades, piezas y OT", icon: "PR", image: "produccion.svg", tone: "green" },
+  produccionMenu: { label: "Produccion", detail: "Piezas, OT y seguimiento", icon: "PR", image: "produccion.svg", tone: "green" },
   comprasMenu: { label: "Compras", detail: "Requisiciones y OC", icon: "CP", image: "compras.svg", tone: "orange" },
   clientes: { label: "Clientes", detail: "Datos fiscales y contactos", icon: "CL", image: "clientes.svg", tone: "teal", parent: "catalogosMenu" },
   proveedores: { label: "Proveedores", detail: "Pagos, RFC y retenciones", icon: "PV", image: "proveedores.svg", tone: "sky", parent: "catalogosMenu" },
   operadores: { label: "Operadores", detail: "Personal de taller y choferes", icon: "OP", image: "operadores.svg", tone: "amber", parent: "catalogosMenu" },
-  actividades: { label: "Actividades", detail: "Operaciones oficiales Tornos SA de CV", icon: "AC", image: "actividades.svg", tone: "blue", parent: "produccionMenu" },
   piezas: { label: "Piezas", detail: "Alta y detalle de piezas", icon: "PZ", image: "piezas.svg", tone: "indigo", parent: "produccionMenu" },
   ordenes: { label: "Ordenes de trabajo", detail: "Agrupar piezas por OT", icon: "OT", image: "ordenes.svg", tone: "steel", parent: "produccionMenu" },
   monitor: { label: "Monitor de produccion", detail: "Estatus, notas y seguimiento", icon: "MN", image: "monitor.svg", tone: "green", parent: "produccionMenu" },
@@ -76,7 +88,8 @@ const moduleCards = {
   ordenesCompra: { label: "Ordenes de compra", detail: "OC, IVA y retenciones", icon: "OC", image: "ordenes-compra.svg", tone: "red", parent: "comprasMenu" },
   almacen: { label: "Almacen", detail: "Inventario y reorden", icon: "AL", image: "almacen.svg", tone: "amber" },
   remisiones: { label: "Remisiones", detail: "Salidas y entregas", icon: "RM", image: "remisiones.svg", tone: "cyan" },
-  reportes: { label: "Reportes", detail: "Analisis y exportacion", icon: "RP", image: "reportes.svg", tone: "sky" }
+  reportes: { label: "Reportes", detail: "Analisis y exportacion", icon: "RP", image: "reportes.svg", tone: "sky" },
+  ajustes: { label: "Ajustes", detail: "Perfiles, cuentas y passwords", icon: "AJ", image: "ajustes.svg", tone: "steel" }
 };
 
 const menuSections = [
@@ -90,7 +103,7 @@ const menuSections = [
     id: "produccionMenu",
     title: "Produccion",
     navLabel: "Produccion",
-    items: ["actividades", "piezas", "ordenes", "monitor", "tiempos"]
+    items: ["piezas", "ordenes", "monitor", "tiempos"]
   },
   {
     id: "comprasMenu",
@@ -100,7 +113,7 @@ const menuSections = [
   }
 ];
 
-const mainMenuItems = ["dashboard", "catalogosMenu", "produccionMenu", "comprasMenu", "almacen", "remisiones", "reportes"];
+const mainMenuItems = ["dashboard", "catalogosMenu", "produccionMenu", "comprasMenu", "almacen", "remisiones", "reportes", "ajustes"];
 
 const menuViews = Object.fromEntries(menuSections.map(section => [
   section.id,
@@ -115,21 +128,21 @@ const menuViews = Object.fromEntries(menuSections.map(section => [
 const views = {
   ...menuViews,
   menuGeneral: { title: "Menu principal", eyebrow: "Aplicaciones", exportable: false, render: renderMenuGeneral },
-  dashboard: { title: "Dashboard operativo", render: renderDashboard },
-  altas: { title: "Altas", render: renderAltas },
-  clientes: { title: "Clientes", render: renderClientes },
-  proveedores: { title: "Proveedores", render: renderProveedores },
-  piezas: { title: "Piezas", render: renderPiezas },
-  actividades: { title: "Actividades de produccion", render: renderActividades },
-  ordenes: { title: "Ordenes de trabajo", render: renderOrdenes },
-  monitor: { title: "Monitor de produccion", render: renderMonitor },
-  operadores: { title: "Operadores", render: renderOperadores },
-  tiempos: { title: "Captura de tiempos", render: renderTiempos },
-  requisiciones: { title: "Requisiciones", render: renderRequisiciones },
-  ordenesCompra: { title: "Ordenes de compra", render: renderOrdenesCompra },
-  almacen: { title: "Almacen basico", render: renderAlmacen },
-  remisiones: { title: "Remisiones", render: renderRemisiones },
-  reportes: { title: "Reportes", render: renderReportes }
+  dashboard: { title: "Dashboard operativo", exportable: true, render: renderDashboard },
+  altas: { title: "Altas", exportable: false, importable: false, render: renderAltas },
+  clientes: { title: "Clientes", exportable: true, importable: true, render: renderClientes },
+  proveedores: { title: "Proveedores", exportable: true, importable: true, render: renderProveedores },
+  piezas: { title: "Piezas", exportable: true, importable: true, render: renderPiezas },
+  ordenes: { title: "Ordenes de trabajo", exportable: true, importable: true, render: renderOrdenes },
+  monitor: { title: "Monitor de produccion", exportable: true, importable: false, render: renderMonitor },
+  operadores: { title: "Operadores", exportable: true, importable: true, render: renderOperadores },
+  tiempos: { title: "Captura de tiempos", exportable: true, importable: true, render: renderTiempos },
+  requisiciones: { title: "Requisiciones", exportable: true, importable: true, render: renderRequisiciones },
+  ordenesCompra: { title: "Ordenes de compra", exportable: true, importable: true, render: renderOrdenesCompra },
+  almacen: { title: "Almacen basico", exportable: true, importable: true, render: renderAlmacen },
+  remisiones: { title: "Remisiones", exportable: true, importable: true, render: renderRemisiones },
+  reportes: { title: "Reportes", exportable: true, importable: false, render: renderReportes },
+  ajustes: { title: "Ajustes", exportable: false, importable: false, render: renderAjustes }
 };
 
 const importConfigs = {
@@ -350,6 +363,12 @@ nav.addEventListener("click", event => {
   }
 });
 
+root.addEventListener("click", event => {
+  const button = event.target.closest(".table-sort-link");
+  if (!button) return;
+  sortTableByColumn(button.closest("table"), Number(button.dataset.sortColumn));
+});
+
 document.addEventListener("keydown", event => {
   if (currentViewName === "monitor") {
     const shortcut = MONITOR_SHORTCUTS.find(item => item.key === event.key);
@@ -379,11 +398,14 @@ if (getToken()) {
 
 async function boot() {
   const me = await api("/api/auth/me");
+  currentSession = me;
+  currentAccess = me.access || {};
   currentUser.textContent = me.displayName;
   loginView.hidden = true;
   appView.hidden = false;
+  renderNavigation();
   await loadReferenceData();
-  await navigate("dashboard");
+  await navigate(canAccessView("dashboard") ? "dashboard" : firstAccessibleView());
 }
 
 function showLogin() {
@@ -394,7 +416,8 @@ function showLogin() {
 
 async function navigate(viewName) {
   closeNavigation();
-  const activeViewName = views[viewName] ? viewName : "dashboard";
+  const requestedViewName = views[viewName] ? viewName : "dashboard";
+  const activeViewName = canAccessView(requestedViewName) ? requestedViewName : firstAccessibleView();
   const view = views[activeViewName];
   currentViewName = activeViewName;
   title.textContent = view.title;
@@ -416,23 +439,56 @@ function closeNavigation() {
   navToggle.setAttribute("aria-expanded", "false");
 }
 
+function renderNavigation() {
+  nav.querySelectorAll("button[data-view]").forEach(button => {
+    button.hidden = !canAccessView(button.dataset.view);
+  });
+}
+
+function canAccessView(viewName) {
+  if (viewName === "menuGeneral") return true;
+  const hasAccessData = currentAccess && Object.keys(currentAccess).length > 0;
+  if (!hasAccessData) return true;
+  const section = menuSections.find(item => item.id === viewName);
+  if (section) {
+    return Boolean(currentAccess[viewName]?.canView) && section.items.some(item => canAccessView(item));
+  }
+  const parent = moduleCards[viewName]?.parent;
+  if (parent && !currentAccess[parent]?.canView) return false;
+  return Boolean(currentAccess[viewName]?.canView);
+}
+
+function canUseFunction(viewName, actionKey) {
+  if (!currentAccess || !Object.keys(currentAccess).length) return true;
+  return Boolean(currentAccess[viewName]?.[actionKey]);
+}
+
+function canAccessAny(...viewNames) {
+  return viewNames.some(viewName => canAccessView(viewName));
+}
+
+function firstAccessibleView() {
+  return mainMenuItems.find(viewName => canAccessView(viewName)) || "menuGeneral";
+}
+
 async function loadReferenceData() {
   const [clientes, proveedores, estatus, operadores, piezas, articulos] = await Promise.all([
-    api("/api/clientes"),
-    api("/api/proveedores"),
-    api("/api/estatus-produccion"),
-    api("/api/operadores"),
-    api("/api/piezas"),
-    api("/api/almacen/articulos")
+    canAccessAny("clientes", "piezas", "ordenes", "requisiciones", "remisiones", "reportes", "dashboard") ? api("/api/clientes") : [],
+    canAccessAny("proveedores", "ordenesCompra", "reportes", "dashboard") ? api("/api/proveedores") : [],
+    canAccessAny("piezas", "monitor", "tiempos", "reportes", "dashboard") ? api("/api/estatus-produccion") : [],
+    canAccessAny("operadores", "tiempos", "reportes", "dashboard") ? api("/api/operadores") : [],
+    canAccessAny("piezas", "monitor", "ordenes", "requisiciones", "remisiones", "reportes", "dashboard") ? api("/api/piezas") : [],
+    canAccessAny("almacen", "dashboard") ? api("/api/almacen/articulos") : []
   ]);
   cache = { clientes, proveedores, estatus, operadores, piezas, articulos };
 }
 
 function renderMenuSection(sectionId) {
   const section = menuSections.find(item => item.id === sectionId) || menuSections[0];
+  const items = section.items.filter(viewName => canAccessView(viewName));
   root.innerHTML = `
     <div class="app-card-grid">
-      ${section.items.map(viewName => menuCard(viewName)).join("")}
+      ${items.length ? items.map(viewName => menuCard(viewName)).join("") : `<div class="panel empty-state">Sin accesos asignados para este menu</div>`}
     </div>`;
   root.querySelectorAll("[data-go]").forEach(button => {
     button.addEventListener("click", () => navigate(button.dataset.go));
@@ -447,7 +503,7 @@ function renderMenuGeneral() {
         <span class="muted">Accesos principales</span>
       </div>
       <div class="app-card-grid">
-        ${mainMenuItems.map(viewName => menuCard(viewName)).join("")}
+        ${mainMenuItems.filter(viewName => canAccessView(viewName)).map(viewName => menuCard(viewName)).join("")}
       </div>
     </section>`;
   root.querySelectorAll("[data-go]").forEach(button => {
@@ -458,7 +514,7 @@ function renderMenuGeneral() {
 function menuCard(viewName) {
   const card = moduleCards[viewName];
   const view = views[viewName];
-  if (!card || !view) return "";
+  if (!card || !view || !canAccessView(viewName)) return "";
   const imageSrc = card.image ? `${MENU_ICON_BASE}${card.image}` : "";
   return `
     <button class="app-card" type="button" data-go="${escapeHtml(viewName)}" data-tone="${escapeHtml(card.tone || "blue")}">
@@ -499,8 +555,9 @@ async function renderDashboard() {
   const activeReqs = requisiciones.filter(r => !r.surtido && !r.cancelado);
   const reqsWithoutOc = activeReqs.filter(r => !r.enviadaACompras);
   const reorderItems = cache.articulos.filter(a => Number(a.existencia || 0) <= Number(a.puntoReorden || 0));
-  const ocTotal = ordenesCompra.reduce((sum, order) => sum + Number(order.total || 0), 0);
-  const ocWithRetentions = ordenesCompra.filter(order => (Number(order.retencionIva || 0) + Number(order.retencionIsr || 0)) > 0);
+  const activeOrdenesCompra = ordenesCompra.filter(order => !order.cancelado);
+  const ocTotal = activeOrdenesCompra.reduce((sum, order) => sum + Number(order.total || 0), 0);
+  const ocWithRetentions = activeOrdenesCompra.filter(order => (Number(order.retencionIva || 0) + Number(order.retencionIsr || 0)) > 0);
   const pendingRemision = pendingPieces.filter(p => Number(p.cantidadEntregada || 0) < Number(p.cantidad || 0));
 
   const rubros = [
@@ -559,7 +616,7 @@ async function renderDashboard() {
             rubro.critical,
             rubro.warning,
             dashboardStatusBadge(rubro.status, rubro.tone),
-            `<button class="secondary" data-dashboard-go="${rubro.view}">${rubro.action}</button>`
+            trustedHtml(`<button class="secondary" data-dashboard-go="${escapeHtml(rubro.view)}">${escapeHtml(rubro.action)}</button>`)
           ]))}
         </section>
 
@@ -618,10 +675,10 @@ function dashboardCriticalRows(overduePieces, reqsWithoutOc, reorderItems) {
     .forEach(p => rows.push([
       "Produccion",
       p.id,
-      `${escapeHtml(p.clienteNombre || "")} | ${escapeHtml(p.descripcion || "")}`,
+      `${p.clienteNombre || ""} | ${p.descripcion || ""}`,
       p.fechaCompromiso || "",
       dashboardStatusBadge("Vencida", "danger"),
-      `<button class="secondary" data-dashboard-go="monitor">Monitor</button>`
+      trustedHtml(`<button class="secondary" data-dashboard-go="monitor">Monitor</button>`)
     ]));
 
   reqsWithoutOc.slice(0, 4).forEach(r => rows.push([
@@ -630,7 +687,7 @@ function dashboardCriticalRows(overduePieces, reqsWithoutOc, reorderItems) {
     r.solicitante || "",
     formatDateTime(r.fecha),
     dashboardStatusBadge("Sin OC", "warning"),
-    `<button class="secondary" data-dashboard-go="ordenesCompra">OC</button>`
+    trustedHtml(`<button class="secondary" data-dashboard-go="ordenesCompra">OC</button>`)
   ]));
 
   reorderItems.slice(0, 4).forEach(a => rows.push([
@@ -639,7 +696,7 @@ function dashboardCriticalRows(overduePieces, reqsWithoutOc, reorderItems) {
     a.descripcion || "",
     `Exist. ${a.existencia ?? 0} / Reorden ${a.puntoReorden ?? 0}`,
     dashboardStatusBadge("Reorden", "danger"),
-    `<button class="secondary" data-dashboard-go="almacen">Almacen</button>`
+    trustedHtml(`<button class="secondary" data-dashboard-go="almacen">Almacen</button>`)
   ]));
 
   if (rows.length) return rows;
@@ -649,7 +706,7 @@ function dashboardCriticalRows(overduePieces, reqsWithoutOc, reorderItems) {
     "Sin pendientes criticos detectados",
     todayDate(),
     dashboardStatusBadge("En orden", "ok"),
-    `<button class="secondary" data-dashboard-go="monitor">Ver monitor</button>`
+    trustedHtml(`<button class="secondary" data-dashboard-go="monitor">Ver monitor</button>`)
   ]];
 }
 
@@ -705,7 +762,7 @@ function summaryItem(label, value, detail, tone) {
 }
 
 function dashboardStatusBadge(value, tone) {
-  return `<span class="badge ${tone}">${escapeHtml(value)}</span>`;
+  return badge(value, tone);
 }
 
 function countBy(items, getKey) {
@@ -857,39 +914,497 @@ async function renderOperadores() {
   document.querySelector("#operador-form").addEventListener("submit", submitJson("/api/operadores", () => navigate("operadores")));
 }
 
-function renderActividades() {
-  root.innerHTML = `
-    <section class="panel">
-      <div class="panel-title-row">
-        <h3>Actividades oficiales</h3>
-        <span class="badge ok">Fuente Cosmos</span>
-      </div>
-      <div class="activity-grid">
-        ${OFFICIAL_ACTIVITIES.map(activityCard).join("")}
-      </div>
-    </section>
-    ${table(["Actividad", "Categoria", "Proveedor", "Cobertura", "Descripcion", "Fuente"], OFFICIAL_ACTIVITIES.map(activity => [
-      escapeHtml(activity.name),
-      escapeHtml(activity.category),
-      escapeHtml(activity.provider),
-      escapeHtml(activity.coverage),
-      escapeHtml(activity.description),
-      `<a href="${escapeHtml(activity.source)}" target="_blank" rel="noopener">Cosmos</a>`
-    ]))}`;
+async function renderAjustes() {
+  if (currentSettingsTab === "accesos") {
+    await renderAjustesAccesos();
+    return;
+  }
+  await renderAjustesGeneral();
 }
 
-function activityCard(activity) {
-  return `
-    <article class="activity-card">
-      <span class="badge">${escapeHtml(activity.category)}</span>
-      <h3>${escapeHtml(activity.name)}</h3>
-      <p>${escapeHtml(activity.description)}</p>
-      <div class="activity-meta">
-        <span>${escapeHtml(activity.provider)}</span>
-        <span>Cobertura ${escapeHtml(activity.coverage)}</span>
+async function renderAjustesGeneral() {
+  const [perfiles, usuarios] = await Promise.all([
+    api("/api/ajustes/perfiles"),
+    api("/api/ajustes/usuarios")
+  ]);
+  const usuariosActivos = usuarios.filter(usuario => usuario.active);
+  const usuariosBloqueados = usuarios.filter(usuario => usuario.locked);
+  const perfilesActivos = perfiles.filter(perfil => perfil.activo);
+
+  root.innerHTML = `
+    ${settingsTabs("general")}
+    <div class="dashboard-kpi-strip">
+      ${dashboardKpi("Usuarios activos", usuariosActivos.length, `${usuarios.length} cuenta(s)`, usuariosBloqueados.length ? "warning" : "ok")}
+      ${dashboardKpi("Cuentas bloqueadas", usuariosBloqueados.length, "pendientes de desbloqueo", usuariosBloqueados.length ? "danger" : "ok")}
+      ${dashboardKpi("Perfiles activos", perfilesActivos.length, `${perfiles.length} perfil(es)`, perfilesActivos.length ? "ok" : "warning")}
+      ${dashboardKpi("Administradores", usuarios.filter(usuario => usuario.active && usuario.roles.includes("ADMIN")).length, "perfil ADMIN", "ok")}
+      ${dashboardKpi("Intentos fallidos", usuarios.reduce((sum, usuario) => sum + Number(usuario.failedAttempts || 0), 0), "acumulados", usuariosBloqueados.length ? "danger" : "ok")}
+    </div>
+
+    <div class="settings-layout">
+      <section class="panel settings-block">
+        <div class="panel-title-row">
+          <h3>Perfiles</h3>
+          <span class="muted">Alta, baja y actualizacion</span>
+        </div>
+        <form class="form-grid" id="perfil-form">
+          <label>Codigo<input name="codigo" maxlength="40" required></label>
+          <label>Nombre<input name="nombre" required></label>
+          <label>Estado
+            <select name="activo">
+              <option value="true">Activo</option>
+              <option value="false">Baja</option>
+            </select>
+          </label>
+          <label class="wide">Descripcion<input name="descripcion"></label>
+          <div class="split-actions wide">
+            <button type="submit" id="perfil-submit">Guardar perfil</button>
+            <button class="secondary" type="button" id="perfil-cancel">Nuevo perfil</button>
+          </div>
+        </form>
+        ${table(["Codigo", "Perfil", "Estado", "Acciones"], perfiles.map(perfil => [
+          escapeHtml(perfil.codigo),
+          settingsMainCell(perfil.nombre, perfil.descripcion || "Sin descripcion"),
+          trustedHtml(`${perfil.activo ? badge("Activo", "ok") : badge("Baja", "danger")}<span class="settings-mini">${escapeHtml(perfil.usuariosAsignados)} usuario(s)</span>`),
+          trustedHtml(`<div class="split-actions compact-actions">
+            <button class="secondary" type="button" data-profile-edit="${escapeHtml(perfil.codigo)}">Editar</button>
+            <button class="secondary" type="button" data-profile-state="${escapeHtml(perfil.codigo)}">${perfil.activo ? "Baja" : "Activar"}</button>
+            <button class="secondary danger-button" type="button" data-profile-delete="${escapeHtml(perfil.codigo)}"${perfil.codigo === "ADMIN" || Number(perfil.usuariosAsignados || 0) > 0 ? " disabled" : ""}>Eliminar</button>
+          </div>`)
+        ]))}
+      </section>
+
+      <section class="panel settings-block">
+        <div class="panel-title-row">
+          <h3>Cuentas</h3>
+          <span class="muted">Usuarios y accesos</span>
+        </div>
+        <form class="form-grid" id="usuario-form">
+          <input type="hidden" name="userId">
+          <label>Usuario<input name="username" autocomplete="off" required></label>
+          <label>Nombre<input name="displayName" required></label>
+          <label>Correo<input name="email" type="email"></label>
+          <label>Activo
+            <select name="active">
+              <option value="true">Activo</option>
+              <option value="false">Baja</option>
+            </select>
+          </label>
+          <label>Bloqueo
+            <select name="locked">
+              <option value="false">Desbloqueada</option>
+              <option value="true">Bloqueada</option>
+            </select>
+          </label>
+          <label>Password inicial
+            <input name="password" type="password" autocomplete="new-password" minlength="8" pattern="(?=.*[A-Z])(?=.*[a-z])(?=.*[/&%$#&quot;.]).{8,}" title="Minimo 8 caracteres, una mayuscula, una minuscula y un signo: / & % $ # &quot; . " required>
+          </label>
+          <div class="wide">
+            <div class="section-label">Perfiles</div>
+            <div class="profile-choice-grid">
+              ${profileOptions(perfiles)}
+            </div>
+          </div>
+          <div class="split-actions wide">
+            <button type="submit" id="usuario-submit">Guardar cuenta</button>
+            <button class="secondary" type="button" id="usuario-cancel">Nueva cuenta</button>
+          </div>
+        </form>
+
+        <form class="form-grid settings-password-form" id="password-form">
+          <label>Cuenta
+            <select name="userId" required>
+              ${usuarios.map(usuario => `<option value="${usuario.id}">${escapeHtml(userLabel(usuario))}</option>`).join("")}
+            </select>
+          </label>
+          <label>Nuevo password
+            <input name="password" type="password" autocomplete="new-password" minlength="8" pattern="(?=.*[A-Z])(?=.*[a-z])(?=.*[/&%$#&quot;.]).{8,}" title="Minimo 8 caracteres, una mayuscula, una minuscula y un signo: / & % $ # &quot; . " required>
+          </label>
+          <button type="submit">Cambiar password</button>
+        </form>
+
+        ${table(["Cuenta", "Perfiles", "Estado", "Acceso", "Acciones"], usuarios.map(usuario => [
+          settingsMainCell(usuario.username, `${usuario.displayName}${usuario.email ? ` | ${usuario.email}` : ""}`),
+          escapeHtml(usuario.roles.map(role => profileLabel(role, perfiles)).join(", ")),
+          usuario.active ? badge("Activo", "ok") : badge("Baja", "danger"),
+          trustedHtml(`${usuario.locked ? badge(`Bloqueada (${usuario.failedAttempts})`, "danger") : badge("Desbloqueada", "ok")}<span class="settings-mini">${escapeHtml(formatDateTimeFull(usuario.lastLoginAt) || "Sin acceso")}</span>`),
+          trustedHtml(`<div class="split-actions compact-actions">
+            <button class="secondary" type="button" data-user-edit="${usuario.id}">Editar</button>
+            <button class="secondary" type="button" data-user-state="${usuario.id}">${usuario.active ? "Baja" : "Activar"}</button>
+            <button class="secondary" type="button" data-user-unlock="${usuario.id}"${usuario.locked ? "" : " disabled"}>Desbloquear</button>
+          </div>`)
+        ]))}
+      </section>
+    </div>`;
+
+  const perfilForm = document.querySelector("#perfil-form");
+  const usuarioForm = document.querySelector("#usuario-form");
+  const passwordForm = document.querySelector("#password-form");
+
+  bindSettingsTabs();
+  resetProfileForm();
+  resetUserForm();
+
+  perfilForm.codigo.addEventListener("blur", () => {
+    perfilForm.codigo.value = profileCodeClient(perfilForm.codigo.value);
+  });
+
+  perfilForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    const editing = perfilForm.dataset.editing || "";
+    const payload = normalize(formData(perfilForm));
+    payload.codigo = profileCodeClient(payload.codigo);
+    try {
+      await api(editing ? `/api/ajustes/perfiles/${encodeURIComponent(editing)}` : "/api/ajustes/perfiles", {
+        method: editing ? "PUT" : "POST",
+        body: JSON.stringify(payload)
+      });
+      await navigate("ajustes");
+    } catch (error) {
+      alert(error.message || "No se pudo guardar el perfil");
+    }
+  });
+
+  document.querySelector("#perfil-cancel").addEventListener("click", resetProfileForm);
+  root.querySelectorAll("[data-profile-edit]").forEach(button => {
+    button.addEventListener("click", () => {
+      const perfil = perfiles.find(item => item.codigo === button.dataset.profileEdit);
+      if (!perfil) return;
+      perfilForm.dataset.editing = perfil.codigo;
+      perfilForm.codigo.value = perfil.codigo;
+      perfilForm.codigo.disabled = true;
+      perfilForm.nombre.value = perfil.nombre || "";
+      perfilForm.descripcion.value = perfil.descripcion || "";
+      perfilForm.activo.value = String(perfil.activo);
+      document.querySelector("#perfil-submit").textContent = "Actualizar perfil";
+    });
+  });
+  root.querySelectorAll("[data-profile-state]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const perfil = perfiles.find(item => item.codigo === button.dataset.profileState);
+      if (!perfil) return;
+      if (perfil.activo && !confirm(`Dar de baja el perfil ${perfil.codigo}?`)) return;
+      try {
+        await api(perfil.activo ? `/api/ajustes/perfiles/${encodeURIComponent(perfil.codigo)}` : `/api/ajustes/perfiles/${encodeURIComponent(perfil.codigo)}/estado`, {
+          method: perfil.activo ? "DELETE" : "PUT",
+          body: perfil.activo ? undefined : JSON.stringify({ activo: true })
+        });
+        await navigate("ajustes");
+      } catch (error) {
+        alert(error.message || "No se pudo cambiar el estado del perfil");
+      }
+    });
+  });
+  root.querySelectorAll("[data-profile-delete]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const perfil = perfiles.find(item => item.codigo === button.dataset.profileDelete);
+      if (!perfil) return;
+      if (!confirm(`Eliminar definitivamente el perfil ${perfil.codigo}?`)) return;
+      try {
+        await api(`/api/ajustes/perfiles/${encodeURIComponent(perfil.codigo)}/eliminar`, { method: "DELETE" });
+        await navigate("ajustes");
+      } catch (error) {
+        alert(error.message || "No se pudo eliminar el perfil");
+      }
+    });
+  });
+
+  usuarioForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    const id = usuarioForm.userId.value;
+    const selectedRoles = [...usuarioForm.querySelectorAll("input[name='roles']:checked")].map(input => input.value);
+    if (!selectedRoles.length) {
+      alert("Selecciona al menos un perfil");
+      return;
+    }
+    if (!id) {
+      const validation = passwordPolicyMessage(usuarioForm.password.value);
+      if (validation) {
+        alert(validation);
+        usuarioForm.password.focus();
+        return;
+      }
+    }
+    const payload = {
+      username: usuarioForm.username.value.trim(),
+      displayName: usuarioForm.displayName.value.trim(),
+      email: usuarioForm.email.value.trim() || null,
+      active: usuarioForm.active.value === "true",
+      locked: usuarioForm.locked.value === "true",
+      roles: selectedRoles
+    };
+    if (!id) payload.password = usuarioForm.password.value;
+    try {
+      await api(id ? `/api/ajustes/usuarios/${id}` : "/api/ajustes/usuarios", {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify(payload)
+      });
+      await navigate("ajustes");
+    } catch (error) {
+      alert(error.message || "No se pudo guardar la cuenta");
+    }
+  });
+
+  document.querySelector("#usuario-cancel").addEventListener("click", resetUserForm);
+  root.querySelectorAll("[data-user-edit]").forEach(button => {
+    button.addEventListener("click", () => {
+      const usuario = usuarios.find(item => String(item.id) === button.dataset.userEdit);
+      if (!usuario) return;
+      usuarioForm.userId.value = usuario.id;
+      usuarioForm.username.value = usuario.username || "";
+      usuarioForm.displayName.value = usuario.displayName || "";
+      usuarioForm.email.value = usuario.email || "";
+      usuarioForm.active.value = String(usuario.active);
+      usuarioForm.locked.value = String(usuario.locked);
+      usuarioForm.password.value = "";
+      usuarioForm.password.required = false;
+      usuarioForm.password.placeholder = "Usa Cambiar password";
+      usuarioForm.querySelectorAll("input[name='roles']").forEach(input => {
+        input.checked = usuario.roles.includes(input.value);
+      });
+      document.querySelector("#usuario-submit").textContent = "Actualizar cuenta";
+    });
+  });
+  root.querySelectorAll("[data-user-state]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const usuario = usuarios.find(item => String(item.id) === button.dataset.userState);
+      if (!usuario) return;
+      if (usuario.active && !confirm(`Dar de baja la cuenta ${usuario.username}?`)) return;
+      try {
+        await api(usuario.active ? `/api/ajustes/usuarios/${usuario.id}` : `/api/ajustes/usuarios/${usuario.id}/estado`, {
+          method: usuario.active ? "DELETE" : "PUT",
+          body: usuario.active ? undefined : JSON.stringify({ active: true })
+        });
+        await navigate("ajustes");
+      } catch (error) {
+        alert(error.message || "No se pudo cambiar el estado de la cuenta");
+      }
+    });
+  });
+  root.querySelectorAll("[data-user-unlock]").forEach(button => {
+    button.addEventListener("click", async () => {
+      try {
+        await api(`/api/ajustes/usuarios/${button.dataset.userUnlock}/unlock`, { method: "PUT" });
+        await navigate("ajustes");
+      } catch (error) {
+        alert(error.message || "No se pudo desbloquear la cuenta");
+      }
+    });
+  });
+
+  passwordForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    const validation = passwordPolicyMessage(passwordForm.password.value);
+    if (validation) {
+      alert(validation);
+      passwordForm.password.focus();
+      return;
+    }
+    try {
+      await api(`/api/ajustes/usuarios/${passwordForm.userId.value}/password`, {
+        method: "PUT",
+        body: JSON.stringify({ password: passwordForm.password.value })
+      });
+      await navigate("ajustes");
+    } catch (error) {
+      alert(error.message || "No se pudo cambiar el password");
+    }
+  });
+
+  function resetProfileForm() {
+    perfilForm.reset();
+    perfilForm.dataset.editing = "";
+    perfilForm.codigo.disabled = false;
+    perfilForm.activo.value = "true";
+    document.querySelector("#perfil-submit").textContent = "Guardar perfil";
+  }
+
+  function resetUserForm() {
+    usuarioForm.reset();
+    usuarioForm.userId.value = "";
+    usuarioForm.active.value = "true";
+    usuarioForm.locked.value = "false";
+    usuarioForm.password.required = true;
+    usuarioForm.password.placeholder = "";
+    usuarioForm.querySelectorAll("input[name='roles']").forEach(input => {
+      input.checked = false;
+    });
+    const defaultRole = usuarioForm.querySelector("input[name='roles'][value='OPERADOR']") || usuarioForm.querySelector("input[name='roles']");
+    if (defaultRole) defaultRole.checked = true;
+    document.querySelector("#usuario-submit").textContent = "Guardar cuenta";
+  }
+}
+
+async function renderAjustesAccesos() {
+  const data = await api("/api/ajustes/accesos");
+  const perfiles = data.perfiles || [];
+  const catalog = data.catalog || [];
+  const accesos = data.accesos || {};
+  if (!selectedAccessProfileCode || !perfiles.some(perfil => perfil.codigo === selectedAccessProfileCode)) {
+    selectedAccessProfileCode = perfiles.find(perfil => perfil.codigo === "ADMIN")?.codigo || perfiles[0]?.codigo || "";
+  }
+  const selectedProfile = perfiles.find(perfil => perfil.codigo === selectedAccessProfileCode);
+  const selectedAccess = accesos[selectedAccessProfileCode] || {};
+
+  root.innerHTML = `
+    ${settingsTabs("accesos")}
+    <section class="panel settings-access-panel">
+      <div class="panel-title-row">
+        <h3>Accesos por perfil</h3>
+        <span class="muted">Menus y funciones disponibles</span>
       </div>
-      <a href="${escapeHtml(activity.source)}" target="_blank" rel="noopener">Ver fuente oficial</a>
-    </article>`;
+      <div class="settings-access-toolbar">
+        <label>Perfil
+          <select id="access-profile-select">
+            ${perfiles.map(perfil => `<option value="${escapeHtml(perfil.codigo)}"${perfil.codigo === selectedAccessProfileCode ? " selected" : ""}>${escapeHtml(profileLabel(perfil.codigo, perfiles))}</option>`).join("")}
+          </select>
+        </label>
+        <div class="settings-access-summary">
+          <strong>${escapeHtml(selectedProfile?.nombre || "Perfil")}</strong>
+          <span>${escapeHtml(selectedProfile?.descripcion || "Define permisos para este perfil")}</span>
+        </div>
+      </div>
+      <form id="access-form">
+        ${table(["Menu o modulo", ...ACCESS_ACTIONS.map(action => action.label)], catalog.map(item => {
+          const row = selectedAccess[item.id] || {};
+          return [
+            accessModuleCell(item),
+            ...ACCESS_ACTIONS.map(action => accessCheckbox(item, action, row[action.key]))
+          ];
+        }))}
+        <div class="split-actions settings-access-actions">
+          <button type="submit">Guardar accesos</button>
+          <button class="secondary" type="button" id="access-readonly">Solo lectura</button>
+          <button class="secondary" type="button" id="access-full">Acceso completo</button>
+        </div>
+      </form>
+    </section>`;
+
+  bindSettingsTabs();
+  document.querySelector("#access-profile-select")?.addEventListener("change", event => {
+    selectedAccessProfileCode = event.target.value;
+    void navigate("ajustes");
+  });
+  document.querySelector("#access-readonly")?.addEventListener("click", () => {
+    root.querySelectorAll("#access-form input[type='checkbox']").forEach(input => {
+      input.checked = input.dataset.action === "canView";
+    });
+  });
+  document.querySelector("#access-full")?.addEventListener("click", () => {
+    root.querySelectorAll("#access-form input[type='checkbox']:not(:disabled)").forEach(input => {
+      input.checked = true;
+    });
+  });
+  document.querySelector("#access-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const payload = catalog.map(item => {
+      const row = { modulo: item.id };
+      ACCESS_ACTIONS.forEach(action => {
+        const input = root.querySelector(`input[data-module="${cssEscape(item.id)}"][data-action="${action.key}"]`);
+        row[action.key] = Boolean(input?.checked);
+      });
+      return row;
+    });
+    try {
+      const response = await api(`/api/ajustes/accesos/${encodeURIComponent(selectedAccessProfileCode)}`, {
+        method: "PUT",
+        body: JSON.stringify({ accesos: payload })
+      });
+      const me = await api("/api/auth/me");
+      currentSession = me;
+      currentAccess = me.access || {};
+      renderNavigation();
+      selectedAccessProfileCode = response.perfiles?.some(perfil => perfil.codigo === selectedAccessProfileCode) ? selectedAccessProfileCode : "";
+      await navigate("ajustes");
+    } catch (error) {
+      alert(error.message || "No se pudieron guardar los accesos");
+    }
+  });
+}
+
+function settingsTabs(active) {
+  return `
+    <div class="settings-tabs" role="tablist" aria-label="Ajustes">
+      <button class="${active === "general" ? "active" : ""}" type="button" data-settings-tab="general">General</button>
+      <button class="${active === "accesos" ? "active" : ""}" type="button" data-settings-tab="accesos">Accesos</button>
+    </div>`;
+}
+
+function bindSettingsTabs() {
+  root.querySelectorAll("[data-settings-tab]").forEach(button => {
+    button.addEventListener("click", () => {
+      currentSettingsTab = button.dataset.settingsTab;
+      void navigate("ajustes");
+    });
+  });
+}
+
+function accessModuleCell(item) {
+  return trustedHtml(`
+    <div class="settings-cell-main ${item.type === "menu" ? "settings-access-menu" : ""}">
+      <strong>${escapeHtml(item.label)}</strong>
+      <span>${escapeHtml(item.group || "")}${item.parent ? ` | ${escapeHtml(moduleCards[item.parent]?.label || item.parent)}` : ""}</span>
+    </div>`);
+}
+
+function accessCheckbox(item, action, checked) {
+  const disabled = item.type === "menu" && action.key !== "canView";
+  const isChecked = disabled ? false : Boolean(checked);
+  return trustedHtml(`
+    <label class="access-check">
+      <input type="checkbox" data-module="${escapeHtml(item.id)}" data-action="${escapeHtml(action.key)}"${isChecked ? " checked" : ""}${disabled ? " disabled" : ""}>
+      <span class="sr-only">${escapeHtml(`${item.label} ${action.label}`)}</span>
+    </label>`);
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) return CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function profileOptions(perfiles, selectedRoles = []) {
+  const selected = new Set(selectedRoles);
+  return perfiles.map(perfil => `
+    <label class="profile-choice">
+      <input type="checkbox" name="roles" value="${escapeHtml(perfil.codigo)}"${selected.has(perfil.codigo) ? " checked" : ""}>
+      ${escapeHtml(profileLabel(perfil.codigo, perfiles))}
+    </label>`).join("");
+}
+
+function profileLabel(codigo, perfiles) {
+  const perfil = perfiles.find(item => item.codigo === codigo);
+  if (!perfil) return codigo;
+  return perfil.activo ? `${perfil.nombre} (${perfil.codigo})` : `${perfil.nombre} (${perfil.codigo}, baja)`;
+}
+
+function userLabel(usuario) {
+  return `${usuario.username} - ${usuario.displayName}`;
+}
+
+function settingsMainCell(title, detail) {
+  return trustedHtml(`
+    <div class="settings-cell-main">
+      <strong>${escapeHtml(title || "")}</strong>
+      <span>${escapeHtml(detail || "")}</span>
+    </div>`);
+}
+
+function passwordPolicyMessage(password) {
+  if (String(password || "").length < 8) return "El password debe tener al menos 8 caracteres";
+  if (!/[A-Z]/.test(password)) return "El password debe incluir al menos una mayuscula";
+  if (!/[a-z]/.test(password)) return "El password debe incluir al menos una minuscula";
+  if (!/[\/&%$#".]/.test(password)) return "El password debe incluir al menos un signo: / & % $ # \" .";
+  return "";
+}
+
+function profileCodeClient(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
 }
 
 async function renderPiezas() {
@@ -1008,7 +1523,7 @@ function piecePriceLabel(pieza) {
 function drawingLabel(archivo) {
   if (!archivo) return "";
   const name = String(archivo).split(/[\\/]/).pop();
-  return `<span class="drawing-file-name">${escapeHtml(name)}</span>`;
+  return trustedHtml(`<span class="drawing-file-name">${escapeHtml(name)}</span>`);
 }
 
 async function renderOrdenes() {
@@ -1039,10 +1554,10 @@ async function renderOrdenes() {
           o.ordenCompra || "",
           o.fechaCompromiso,
           o.piezaIds?.length || 0,
-          `<div class="split-actions compact-actions">
+          trustedHtml(`<div class="split-actions compact-actions">
             <button class="secondary compact-button ot-preview-button" data-ot-id="${o.id}">Ver</button>
             <button class="secondary compact-button ot-pdf-button" data-ot-id="${o.id}">PDF</button>
-          </div>`
+          </div>`)
         ]))}
       </div>
     </div>`;
@@ -1239,11 +1754,11 @@ function monitorTable(rows) {
             badge(p.diasCompromiso, p.vencida ? "danger" : "ok"),
             escapeHtml(p.estatus || ""),
             monitorEstimateLabel(p),
-            `<button class="secondary status-button" data-pieza-id="${piezaId}">Estatus / notas</button>`
+            trustedHtml(`<button class="secondary status-button" data-pieza-id="${piezaId}">Estatus / notas</button>`)
           ];
           return `
             <tr class="monitor-row${selected}" data-pieza-id="${piezaId}" tabindex="0" aria-selected="${selected ? "true" : "false"}">
-              ${cells.map((cell, index) => `<td data-label="${safeHeaders[index] || ""}">${cell}</td>`).join("")}
+              ${cells.map((cell, index) => `<td data-label="${safeHeaders[index] || ""}">${cellHtml(cell)}</td>`).join("")}
             </tr>`;
         }).join("")}</tbody>
       </table>
@@ -1253,7 +1768,7 @@ function monitorTable(rows) {
 function monitorEstimateLabel(row) {
   const hours = Number(row.horasEstimadas || 0);
   const cost = Number(row.costoEstimado || 0);
-  if (!hours && !cost) return `<span class="muted">Sin estimacion</span>`;
+  if (!hours && !cost) return trustedHtml(`<span class="muted">Sin estimacion</span>`);
   const costLabel = row.monedaEstimacion === "USD" ? formatUsd(cost) : formatMoney(cost);
   return `${hours ? `${hours} h` : "Sin horas"} | ${costLabel}`;
 }
@@ -1515,7 +2030,7 @@ async function renderRequisiciones() {
         </div>
       </form>
     </div>
-    ${table(["Folio", "Solicitante", "Prioridad", "Fecha", "Partidas", "ID Pieza", "Material", "Detalle"], rows.map(r => [
+    ${table(["Folio", "Solicitante", "Prioridad", "Fecha", "Partidas", "ID Pieza", "Material", "Detalle", "Documento"], rows.map(r => [
       r.folio,
       r.solicitante,
       r.prioridad,
@@ -1523,7 +2038,8 @@ async function renderRequisiciones() {
       r.detalles?.length || 0,
       r.detalles?.[0]?.piezaId || "",
       r.detalles?.[0]?.material || "",
-      requisicionDetalleResumen(r.detalles)
+      requisicionDetalleResumen(r.detalles),
+      trustedHtml(`<button class="secondary req-pdf-button" data-req-folio="${escapeHtml(r.folio)}">PDF</button>`)
     ]))}`;
   const form = document.querySelector("#req-form");
   form.piezaId.addEventListener("change", () => updateRequisitionDestination(form));
@@ -1561,6 +2077,12 @@ async function renderRequisiciones() {
   });
   updateRequisitionDestination(form);
   bindRequisitionPartRows();
+  document.querySelectorAll(".req-pdf-button").forEach(button => {
+    button.addEventListener("click", async () => {
+      const blob = await api(`/api/requisiciones/${encodeURIComponent(button.dataset.reqFolio)}/pdf`);
+      window.open(URL.createObjectURL(blob), "_blank", "noopener");
+    });
+  });
 }
 
 function piezaRequisicionOption(pieza) {
@@ -1723,6 +2245,7 @@ async function renderOrdenesCompra() {
       solicitante: r.solicitante,
       enviadaACompras: r.enviadaACompras
     })));
+  const canCancelOrdenCompra = canUseFunction("ordenesCompra", "canDelete");
   root.innerHTML = `
     <form class="panel form-grid" id="oc-form">
       <label>Proveedor<select name="proveedorId" required>${proveedorOptions(cache.proveedores)}</select></label>
@@ -1732,7 +2255,7 @@ async function renderOrdenesCompra() {
       <label class="wide">Observaciones<input name="observaciones"></label>
       <div class="wide">
         ${table(["Sel.", "Req.", "ID Pieza", "Solicitante", "Descripcion", "Cant.", "Unidad", "Destino", "Precio"], partidas.map(d => [
-          `<input class="oc-select" type="checkbox" value="${d.id}">`,
+          trustedHtml(`<input class="oc-select" type="checkbox" value="${Number(d.id)}">`),
           d.requisicionFolio,
           d.piezaId || "",
           d.solicitante,
@@ -1740,7 +2263,7 @@ async function renderOrdenesCompra() {
           d.cantidad,
           d.unidadMedida || "",
           d.destino || "",
-          `<input class="inline-input oc-price" data-price-id="${d.id}" type="number" step="0.01" value="${d.precio || 0}">`
+          trustedHtml(`<input class="inline-input oc-price" data-price-id="${Number(d.id)}" type="number" step="0.01" value="${Number(d.precio || 0)}">`)
         ]))}
       </div>
       <div class="wide split-actions">
@@ -1748,7 +2271,7 @@ async function renderOrdenesCompra() {
         <button class="secondary" type="button" data-go="proveedores">Alta proveedor</button>
       </div>
     </form>
-    ${table(["Folio", "Proveedor", "Fecha", "Subtotal", "IVA", "Retenciones", "Total neto", "Documentos"], ordenesCompra.map(o => [
+    ${table(["Folio", "Proveedor", "Fecha", "Subtotal", "IVA", "Retenciones", "Total neto", "Estado", "Documentos"], ordenesCompra.map(o => [
       o.folio,
       o.proveedorNombre,
       formatDateTime(o.fecha),
@@ -1756,10 +2279,12 @@ async function renderOrdenesCompra() {
       formatMoney(o.iva),
       formatMoney((Number(o.retencionIva) || 0) + (Number(o.retencionIsr) || 0)),
       formatMoney(o.total),
-      `<div class="split-actions compact-actions">
+      trustedHtml(o.cancelado ? badge("Cancelada", "danger") : badge("Activa", "ok")),
+      trustedHtml(`<div class="split-actions compact-actions">
         <button class="secondary oc-pdf-button" data-pdf-id="${o.id}">PDF</button>
         <button class="secondary oc-word-button" data-word-id="${o.id}" data-word-folio="${escapeHtml(o.folio)}">Word</button>
-      </div>`
+        ${!o.cancelado && canCancelOrdenCompra ? `<button class="secondary danger-button oc-cancel-button" data-cancel-id="${o.id}" data-cancel-folio="${escapeHtml(o.folio)}">Cancelar</button>` : ""}
+      </div>`)
     ]))}`;
   document.querySelector("[data-go='proveedores']").addEventListener("click", () => navigate("proveedores"));
   const form = document.querySelector("#oc-form");
@@ -1799,6 +2324,19 @@ async function renderOrdenesCompra() {
     button.addEventListener("click", async () => {
       const blob = await api(`/api/ordenes-compra/${button.dataset.wordId}/word`);
       downloadBlob(blob, `${button.dataset.wordFolio || "orden-compra"}.rtf`);
+    });
+  });
+  document.querySelectorAll(".oc-cancel-button").forEach(button => {
+    button.addEventListener("click", async () => {
+      const folio = button.dataset.cancelFolio || "seleccionada";
+      const confirmed = window.confirm(`Desea cancelar la Orden de Compra ${folio}?\nSi continua no podra utilizar este folio y tendra que generar una nueva orden de compra.`);
+      if (!confirmed) return;
+      try {
+        await api(`/api/ordenes-compra/${button.dataset.cancelId}`, { method: "DELETE" });
+        await navigate("ordenesCompra");
+      } catch (error) {
+        alert(error.message || "No se pudo cancelar la orden de compra");
+      }
     });
   });
 }
@@ -1845,22 +2383,38 @@ async function renderRemisiones() {
   const rows = await api("/api/remisiones");
   const pendientes = cache.piezas.filter(p => !p.entregado && p.id !== TORNOS_INTERNAL_PIEZA_ID);
   root.innerHTML = `
-    <div class="grid-2">
-      <form class="panel form-grid" id="rem-form">
-        <label class="wide">Buscar pieza<input id="rem-search" placeholder="Cliente, OC, no. parte, no. dibujo o descripcion"></label>
-        <label class="wide">Pieza<select name="piezaId" required>${pendientes.map(piezaRemisionOption).join("")}</select></label>
-        <label>Cantidad entregada<input name="cantidadEntregada" type="number" min="1" value="1"></label>
-        <label>Chofer<input name="chofer"></label>
-        <label>Autorizacion<input name="autorizacion"></label>
-        <p class="wide muted" id="rem-piece-summary"></p>
-        <label class="wide">Observaciones<textarea name="observaciones"></textarea></label>
-        <button>Generar remision</button>
-      </form>
-      <div id="rem-search-results">
-        ${renderRemisionSearchTable(pendientes)}
-      </div>
-    </div>
-    ${table(["ID", "Folio", "Cliente", "Pieza", "Cantidad", "PDF"], rows.map(r => [r.id, r.folio, r.clienteNombre, r.piezaId, r.cantidadEntregada, `<button class="secondary pdf-button" data-pdf-id="${r.id}">Abrir PDF</button>`]))}`;
+    <div class="remission-workspace">
+      <section class="panel remission-entry-panel">
+        <form class="form-grid remission-form" id="rem-form">
+          <div class="panel-title-row wide">
+            <h3>Nueva remision</h3>
+          </div>
+          <label class="wide">Buscar pieza<input id="rem-search" placeholder="Cliente, OC, no. parte, no. dibujo o descripcion"></label>
+          <label class="wide">Pieza<select name="piezaId" required>${pendientes.map(piezaRemisionOption).join("")}</select></label>
+          <label>Cantidad entregada<input name="cantidadEntregada" type="number" min="1" value="1"></label>
+          <label>Chofer<input name="chofer"></label>
+          <label>Autorizacion<input name="autorizacion"></label>
+          <p class="wide muted" id="rem-piece-summary"></p>
+          <label class="wide">Observaciones<textarea name="observaciones"></textarea></label>
+          <button>Generar remision</button>
+        </form>
+        <div class="remission-pending-block">
+          <div class="panel-title-row">
+            <h3>Piezas pendientes para remitir</h3>
+          </div>
+          <div id="rem-search-results">
+            ${renderRemisionSearchTable(pendientes)}
+          </div>
+        </div>
+      </section>
+      <section class="panel remission-history-panel">
+        <div class="panel-title-row">
+          <h3>Historial de remisiones creadas</h3>
+          <span class="muted">Registros ya generados con su PDF</span>
+        </div>
+        ${table(["ID", "Folio", "Fecha", "Cliente", "Pieza", "Cantidad", "PDF"], rows.map(r => [r.id, r.folio, formatDateTime(r.fecha), r.clienteNombre, r.piezaId, r.cantidadEntregada, trustedHtml(`<button class="secondary pdf-button" data-pdf-id="${Number(r.id)}">Abrir PDF</button>`)]))}
+      </section>
+    </div>`;
   document.querySelector("#rem-form").addEventListener("submit", submitJson("/api/remisiones", () => navigate("remisiones")));
   const form = document.querySelector("#rem-form");
   const search = document.querySelector("#rem-search");
@@ -1896,13 +2450,14 @@ async function renderRemisiones() {
 }
 
 function renderRemisionSearchTable(piezas) {
-  return table(["Pieza", "Cliente", "OC", "No. parte", "Pendiente", ""], piezas.map(p => [
+  return table(["Pieza", "Cliente", "OC", "No. parte", "Descripcion", "Pendiente", "Accion"], piezas.map(p => [
     p.id,
     p.clienteNombre,
     p.ordenCompra,
     p.noParte || "",
+    p.descripcion || "",
     p.cantidad - p.cantidadEntregada,
-    `<button class="secondary rem-pick" data-pieza-id="${p.id}">Usar</button>`
+    trustedHtml(`<button class="secondary rem-pick" data-pieza-id="${Number(p.id)}">Usar</button>`)
   ]));
 }
 
@@ -1954,6 +2509,10 @@ async function renderReportes() {
   const context = { piezas: cache.piezas, requisiciones, ordenesCompra, tiempos, remisiones, estimaciones, facturas };
   const draw = () => {
     const filters = formData(form);
+    currentReportExport = {
+      reportId: selectedReportId,
+      data: filteredReportData(context, filters)
+    };
     document.querySelector("#report-output").innerHTML = renderReportContent(selectedReportId, context, filters);
     updateReportSelection();
     bindReportActions(context);
@@ -2126,11 +2685,26 @@ function filteredReportData(context, filters) {
 
 function renderDiarioOperador(option, data) {
   const totalMinutos = sumReport(data.tiempos, tiempo => tiempo.minutos);
+  const historyRows = reportDailyOperatorHistory(data.tiempos);
   return reportFrame(option, [
     metric("Registros", data.tiempos.length),
     metric("Operadores", uniqueCount(data.tiempos, tiempo => tiempo.operadorId)),
+    metric("Dias", uniqueCount(data.tiempos, tiempo => reportDate(tiempo.inicio))),
     metric("Minutos", totalMinutos)
   ], `
+    <section class="panel">
+      <h3>Historial por dia y operador</h3>
+      ${table(["Fecha", "Operador", "Registros", "Piezas", "Min.", "Horas", "Primera", "Ultima"], historyRows.map(row => [
+        formatDateOnly(row.fecha),
+        reportText(row.operador),
+        row.registros,
+        row.piezas.size,
+        row.minutos,
+        (row.minutos / 60).toFixed(2),
+        formatDateTime(row.primeraCaptura),
+        formatDateTime(row.ultimaCaptura)
+      ]))}
+    </section>
     <section class="panel">
       <h3>Detalle diario</h3>
       ${table(["Fecha", "Operador", "Pieza", "Descripcion", "Operacion", "Estatus", "Min."], data.tiempos.map(tiempo => [
@@ -2167,6 +2741,7 @@ function renderPiezasFechas(option, data) {
     <section class="panel">
       <h3>Piezas por fechas</h3>
       ${table(["Pieza", "Cliente", "OC", "Requerimiento", "Compromiso", "Dias", "Estatus", "Descripcion"], rows.map(pieza => [
+        pieceSelectCell(pieza.id),
         pieza.id,
         reportText(pieza.clienteNombre),
         reportText(pieza.ordenCompra),
@@ -2175,7 +2750,7 @@ function renderPiezasFechas(option, data) {
         dueBadge(daysUntil(pieza.fechaCompromiso)),
         reportText(pieza.estatus),
         reportText(pieza.descripcion)
-      ]))}
+      ]), { selectableFirstColumn: true })}
     </section>`);
 }
 
@@ -2193,6 +2768,7 @@ function renderPiezasVencer(option, data) {
     <section class="panel">
       <h3>Piezas por vencer</h3>
       ${table(["Pieza", "Cliente", "OC", "Compromiso", "Dias", "Pendiente", "Estatus", "Descripcion"], rows.map(({ pieza, dias }) => [
+        pieceSelectCell(pieza.id),
         pieza.id,
         reportText(pieza.clienteNombre),
         reportText(pieza.ordenCompra),
@@ -2201,7 +2777,7 @@ function renderPiezasVencer(option, data) {
         Math.max(0, Number(pieza.cantidad || 0) - Number(pieza.cantidadEntregada || 0)),
         reportText(pieza.estatus),
         reportText(pieza.descripcion)
-      ]))}
+      ]), { selectableFirstColumn: true })}
     </section>`);
 }
 
@@ -2236,6 +2812,7 @@ function renderPiezasEntregadas(option, data) {
     <section class="panel">
       <h3>Piezas entregadas</h3>
       ${table(["Pieza", "Cliente", "OC", "Cant.", "Entregada", "Compromiso", "Estatus", "Descripcion"], rows.map(pieza => [
+        pieceSelectCell(pieza.id),
         pieza.id,
         reportText(pieza.clienteNombre),
         reportText(pieza.ordenCompra),
@@ -2244,7 +2821,7 @@ function renderPiezasEntregadas(option, data) {
         formatDateOnly(pieza.fechaCompromiso),
         reportText(pieza.estatus),
         reportText(pieza.descripcion)
-      ]))}
+      ]), { selectableFirstColumn: true })}
     </section>`);
 }
 
@@ -2265,6 +2842,7 @@ function renderEstimacionSemanal(option, data) {
       ${table(["Compromiso", "Dias", "Pieza", "Cliente", "Cantidad", "Estatus", "Horas", "Costo", "Descripcion"], rows.map(({ pieza, dias }) => {
         const estimacion = latestEstimate.get(String(pieza.id));
         return [
+        pieceSelectCell(pieza.id),
         formatDateOnly(pieza.fechaCompromiso),
         dueBadge(dias),
         pieza.id,
@@ -2275,7 +2853,7 @@ function renderEstimacionSemanal(option, data) {
         estimacion ? (estimacion.moneda === "USD" ? formatUsd(estimacion.costoEstimado) : formatMoney(estimacion.costoEstimado)) : "",
         reportText(pieza.descripcion)
       ];
-      }))}
+      }), { selectableFirstColumn: true })}
     </section>`);
 }
 
@@ -2371,7 +2949,7 @@ function renderFacturasGeneradas(option, data) {
         formatMoney(factura.iva),
         formatMoney(factura.total),
         reportText(factura.estatus),
-        `<button class="secondary factura-pdf-button" data-factura-id="${factura.id}">PDF</button>`
+        trustedHtml(`<button class="secondary factura-pdf-button" data-factura-id="${Number(factura.id)}">PDF</button>`)
       ]))}
     </section>`);
 }
@@ -2430,6 +3008,7 @@ function reportFrame(option, metrics, body) {
 
 function reportPiecesTable(piezas) {
   return table(["Pieza", "Cliente", "OC", "No. parte", "No. dibujo", "Cant.", "Entregada", "Compromiso", "Estatus", "Descripcion"], piezas.map(pieza => [
+    pieceSelectCell(pieza.id),
     pieza.id,
     reportText(pieza.clienteNombre),
     reportText(pieza.ordenCompra),
@@ -2440,7 +3019,11 @@ function reportPiecesTable(piezas) {
     formatDateOnly(pieza.fechaCompromiso),
     reportText(pieza.estatus),
     reportText(pieza.descripcion)
-  ]));
+  ]), { selectableFirstColumn: true });
+}
+
+function pieceSelectCell(pieceId) {
+  return trustedHtml(`<input class="report-piece-select" type="checkbox" value="${Number(pieceId)}" aria-label="Seleccionar pieza ${Number(pieceId)}">`);
 }
 
 function reportOperatorTotals(tiempos) {
@@ -2456,6 +3039,37 @@ function reportOperatorTotals(tiempos) {
     if (tiempo.piezaId) row.piezas.add(tiempo.piezaId);
   });
   return [...totals.values()].sort((a, b) => b.minutos - a.minutos);
+}
+
+function reportDailyOperatorHistory(tiempos) {
+  const history = new Map();
+  tiempos.forEach(tiempo => {
+    const fecha = reportDate(tiempo.inicio) || "Sin fecha";
+    const operadorKey = String(tiempo.operadorId || tiempo.operadorNombre || "N/D");
+    const key = `${fecha}|${operadorKey}`;
+    if (!history.has(key)) {
+      history.set(key, {
+        fecha,
+        operador: tiempo.operadorNombre || "N/D",
+        registros: 0,
+        minutos: 0,
+        piezas: new Set(),
+        primeraCaptura: tiempo.inicio || "",
+        ultimaCaptura: tiempo.fin || tiempo.inicio || ""
+      });
+    }
+    const row = history.get(key);
+    row.registros += 1;
+    row.minutos += Number(tiempo.minutos || 0);
+    if (tiempo.piezaId) row.piezas.add(tiempo.piezaId);
+    if (tiempo.inicio && (!row.primeraCaptura || tiempo.inicio < row.primeraCaptura)) row.primeraCaptura = tiempo.inicio;
+    const fin = tiempo.fin || tiempo.inicio || "";
+    if (fin && (!row.ultimaCaptura || fin > row.ultimaCaptura)) row.ultimaCaptura = fin;
+  });
+  return [...history.values()].sort((a, b) =>
+    String(b.fecha).localeCompare(String(a.fecha)) ||
+    String(a.operador).localeCompare(String(b.operador), "es-MX", { sensitivity: "base" })
+  );
 }
 
 function reportTotalsBy(items, keyFn) {
@@ -2508,36 +3122,27 @@ function reportText(value) {
 
 function configureExportToolbar(viewName) {
   const view = views[viewName] || {};
-  const canExport = view.exportable !== false;
-  const importConfig = importConfigFor(viewName);
-  if (!canExport && !importConfig) {
+  const canExport = view.exportable === true && canUseFunction(viewName, "canExport") && hasExportableContent();
+  if (!canExport) {
     actions.innerHTML = "";
     return;
   }
   actions.innerHTML = `
     <div class="split-actions toolbar-actions">
       ${canExport ? `
-        <button class="secondary" type="button" id="toolbar-export-csv">CSV</button>
+        <button class="secondary" type="button" id="toolbar-export-excel">Excel</button>
         <button class="secondary" type="button" id="toolbar-export-pdf">PDF</button>
         <button class="secondary" type="button" id="toolbar-print">Imprimir</button>
       ` : ""}
-      ${importConfig ? `
-        <button class="secondary" type="button" id="toolbar-import">Importar CSV</button>
-        <input class="sr-only" id="toolbar-import-file" type="file" accept=".csv,text/csv">
-      ` : ""}
       <span class="toolbar-status" role="status"></span>
     </div>`;
-  document.querySelector("#toolbar-export-csv")?.addEventListener("click", exportCurrentViewCsv);
+  document.querySelector("#toolbar-export-excel")?.addEventListener("click", exportCurrentViewExcel);
   document.querySelector("#toolbar-export-pdf")?.addEventListener("click", exportCurrentViewPdf);
   document.querySelector("#toolbar-print")?.addEventListener("click", printCurrentView);
-  const importButton = document.querySelector("#toolbar-import");
-  const importFile = document.querySelector("#toolbar-import-file");
-  importButton?.addEventListener("click", () => importFile?.click());
-  importFile?.addEventListener("change", () => {
-    const file = importFile.files?.[0];
-    if (file) void handleCsvImport(viewName, file);
-    importFile.value = "";
-  });
+}
+
+function hasExportableContent() {
+  return Boolean(root.querySelector("table, .metric"));
 }
 
 function importConfigFor(viewName) {
@@ -2631,6 +3236,18 @@ async function importOrdenesCompraCsv(rows) {
 }
 
 function exportCurrentViewCsv() {
+  if (currentViewName === "reportes" && currentReportExport?.reportId === "piezasFechas") {
+    const headers = ["ID Pieza", "Orden de Compra", "Nombre del Cliente", "Descripcion", "Cantidad", "FechaRequerimiento", "FechaCompromiso", "tiempoInvertido", "Dias"];
+    const rows = buildPiezasFechasReportRows(selectedReportDataForExport(currentReportExport.data));
+    const lines = [
+      escapeCsvValue("Reporte de piezas por fechas"),
+      headers.map(escapeCsvValue).join(","),
+      ...rows.map(row => row.map(escapeCsvValue).join(","))
+    ];
+    const blob = new Blob([`\uFEFF${lines.join("\r\n")}`], { type: "text/csv;charset=utf-8" });
+    downloadBlob(blob, "reporte-de-piezas-por-fechas.csv");
+    return;
+  }
   const tables = collectExportTables();
   const metrics = collectMetricRows();
   const lines = [];
@@ -2654,7 +3271,26 @@ function exportCurrentViewCsv() {
   downloadBlob(blob, `${safeFileName(currentModuleTitle())}.csv`);
 }
 
+function exportCurrentViewExcel() {
+  const specialReport = currentViewName === "reportes" && currentReportExport?.reportId === "piezasFechas";
+  const html = specialReport ? buildPiezasFechasExcelHtml(selectedReportDataForExport(currentReportExport.data)) : buildExcelExportHtml();
+  const filename = specialReport ? "reporte-de-piezas-por-fechas.xls" : `${safeFileName(currentModuleTitle())}.xls`;
+  const blob = new Blob([`\uFEFF${html}`], { type: "application/vnd.ms-excel;charset=utf-8" });
+  downloadBlob(blob, filename);
+}
+
 function exportCurrentViewPdf() {
+  if (currentViewName === "reportes" && currentReportExport?.reportId === "piezasFechas") {
+    const pdfBytes = createSimplePdf(buildPiezasFechasPdfLines(selectedReportDataForExport(currentReportExport.data)), {
+      fontName: "Courier",
+      fontSize: 5.8,
+      lineHeight: 10,
+      wrapLength: 146,
+      pageSize: 68
+    });
+    downloadBlob(new Blob([pdfBytes], { type: "application/pdf" }), "reporte-de-piezas-por-fechas.pdf");
+    return;
+  }
   const pdfBytes = createSimplePdf(buildPdfExportLines());
   downloadBlob(new Blob([pdfBytes], { type: "application/pdf" }), `${safeFileName(currentModuleTitle())}.pdf`);
 }
@@ -2665,7 +3301,8 @@ function printCurrentView() {
     setToolbarStatus("El navegador bloqueo la impresion", "error");
     return;
   }
-  popup.document.write(buildPrintableExportHtml());
+  const specialReport = currentViewName === "reportes" && currentReportExport?.reportId === "piezasFechas";
+  popup.document.write(specialReport ? buildPiezasFechasExcelHtml(selectedReportDataForExport(currentReportExport.data)) : buildPrintableExportHtml());
   popup.document.close();
   popup.focus();
   popup.print();
@@ -2696,14 +3333,151 @@ function buildPdfExportLines() {
   return lines;
 }
 
-function createSimplePdf(lines) {
+function buildPiezasFechasReportRows(data) {
+  return [...(data?.piezas || [])]
+    .sort((a, b) => String(a.fechaCompromiso || "").localeCompare(String(b.fechaCompromiso || "")))
+    .map(pieza => [
+      pieza.id,
+      pieza.ordenCompra || "-",
+      pieza.clienteNombre || "-",
+      pieza.descripcion || "-",
+      formatReportNumber(pieza.cantidad),
+      formatDateOnly(pieza.fechaRequerimiento),
+      formatDateOnly(pieza.fechaCompromiso),
+      minutesLabel(pieza.tiempoInvertido),
+      daysUntil(pieza.fechaCompromiso)
+    ]);
+}
+
+function selectedReportDataForExport(data) {
+  const selectedIds = selectedReportPieceIds();
+  if (!selectedIds.size) return data;
+  return {
+    ...data,
+    piezas: (data?.piezas || []).filter(pieza => selectedIds.has(String(pieza.id)))
+  };
+}
+
+function selectedReportPieceIds() {
+  return new Set([...root.querySelectorAll(".report-piece-select:checked")].map(input => String(input.value)));
+}
+
+function buildPiezasFechasPdfLines(data) {
+  const rows = buildPiezasFechasReportRows(data);
+  const widths = [8, 12, 20, 32, 7, 17, 17, 10, 6];
+  const separator = `+${widths.map(width => "-".repeat(width)).join("+")}+`;
+  const header = ["ID Pieza", "Orden de Compra", "Nombre del Cliente", "Descripcion", "Cantidad", "FechaRequerim.", "FechaCompromiso", "Tiempo", "Dias"];
+  const lines = [
+    "TORNOS SA DE CV",
+    "REPORTE DE PIEZAS POR FECHAS",
+    `Generado ${new Date().toLocaleString("es-MX")}`,
+    "",
+    separator,
+    fixedWidthRow(header, widths),
+    separator
+  ];
+
+  rows.forEach(row => lines.push(fixedWidthRow(row, widths)));
+
+  lines.push(separator);
+  lines.push(reportPiezasFechasSummary(data));
+  return lines;
+}
+
+function buildPiezasFechasExcelHtml(data) {
+  const headers = ["ID Pieza", "Orden de Compra", "Nombre del Cliente", "Descripcion", "Cantidad", "FechaRequerimiento", "FechaCompromiso", "tiempoInvertido", "Dias"];
+  const rows = buildPiezasFechasReportRows(data);
+  return excelDocumentHtml("Reporte de piezas por fechas", `
+    <table class="legacy-report-table">
+      <thead><tr>${headers.map(header => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody>
+    </table>
+    <p class="summary">${escapeHtml(reportPiezasFechasSummary(data))}</p>`);
+}
+
+function reportPiezasFechasSummary(data) {
+  const piezas = data?.piezas || [];
+  return `Piezas: ${piezas.length} | Clientes: ${uniqueCount(piezas, pieza => pieza.clienteId)} | Cantidad: ${sumReport(piezas, pieza => pieza.cantidad)} | Tiempo invertido: ${minutesLabel(sumReport(piezas, pieza => pieza.tiempoInvertido))}`;
+}
+
+function buildExcelExportHtml() {
+  const tables = collectExportTables();
+  const metrics = collectMetricRows();
+  const content = tables.length
+    ? tables.map(tableData => `
+      <h2>${escapeHtml(tableData.title)}</h2>
+      <table>
+        <thead><tr>${tableData.headers.map(header => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+        <tbody>${tableData.rows.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table>`).join("")
+    : metrics.length
+      ? `<table><thead><tr><th>Indicador</th><th>Valor</th></tr></thead><tbody>${metrics.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+      : "<p>Sin datos para exportar.</p>";
+  return excelDocumentHtml(currentModuleTitle(), content);
+}
+
+function excelDocumentHtml(titleText, content) {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Calibri, Arial, sans-serif; }
+    h1 { font-size: 18pt; color: #17354f; }
+    h2 { font-size: 13pt; color: #17354f; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #d4e1eb; padding: 5px; font-size: 10pt; vertical-align: middle; }
+    th { background: #e7eef4; color: #084d79; font-weight: bold; text-align: center; }
+    .legacy-report-table th { background: #ffd966; color: #000; border: 2px solid #e3362d; }
+    .legacy-report-table td { border: 2px solid #e3362d; text-align: center; }
+    .legacy-report-table tbody tr:nth-child(even) td { background: #d9e2f3; }
+    .legacy-report-table td:nth-child(4) { text-align: left; }
+    .summary { font-weight: bold; color: #17354f; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(titleText)}</h1>
+  <p>Exportado ${escapeHtml(new Date().toLocaleString("es-MX"))}</p>
+  ${content}
+</body>
+</html>`;
+}
+
+function formatReportNumber(value) {
+  const number = Number(value || 0);
+  return Number.isInteger(number) ? String(number) : String(Math.round((number + Number.EPSILON) * 100) / 100);
+}
+
+function fixedWidthRow(values, widths) {
+  return `|${values.map((value, index) => fixedWidthCell(value, widths[index], index === 4 || index >= 7 ? "right" : "left")).join("|")}|`;
+}
+
+function fixedWidthCell(value, width, align = "left") {
+  const text = pdfSafeText(value).replace(/\s+/g, " ").trim();
+  const output = text.length > width ? text.slice(0, Math.max(width - 1, 0)) + "." : text;
+  return align === "right" ? output.padStart(width, " ") : output.padEnd(width, " ");
+}
+
+function minutesLabel(value) {
+  const minutes = Number(value || 0);
+  if (!minutes) return "0 min";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}h ${rest}m` : `${hours}h`;
+}
+
+function createSimplePdf(lines, options = {}) {
   const encoder = new TextEncoder();
-  const wrappedLines = lines.flatMap(line => wrapPdfLine(line, 108));
-  const pages = chunk(wrappedLines, 42);
+  const wrappedLines = lines.flatMap(line => wrapPdfLine(line, options.wrapLength || 108));
+  const pages = chunk(wrappedLines, options.pageSize || 42);
+  const fontName = options.fontName || "Helvetica";
+  const fontSize = options.fontSize || 9;
+  const lineHeight = options.lineHeight || 16;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    `<< /Type /Font /Subtype /Type1 /BaseFont /${fontName} >>`
   ];
   const pageObjectNumbers = [];
 
@@ -2711,7 +3485,7 @@ function createSimplePdf(lines) {
     const pageObjectNumber = 4 + index * 2;
     const contentObjectNumber = pageObjectNumber + 1;
     pageObjectNumbers.push(pageObjectNumber);
-    const stream = drawPdfLines(pageLines);
+    const stream = drawPdfLines(pageLines, { fontSize, lineHeight });
     objects[pageObjectNumber - 1] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectNumber} 0 R >>`;
     objects[contentObjectNumber - 1] = `<< /Length ${encoder.encode(stream).length} >> stream\n${stream}endstream`;
   });
@@ -2733,10 +3507,12 @@ function createSimplePdf(lines) {
   return encoder.encode(body);
 }
 
-function drawPdfLines(lines) {
-  let stream = "BT\n/F1 9 Tf\n48 760 Td\n";
+function drawPdfLines(lines, options = {}) {
+  const fontSize = options.fontSize || 9;
+  const lineHeight = options.lineHeight || 16;
+  let stream = `BT\n/F1 ${fontSize} Tf\n48 760 Td\n`;
   lines.forEach((line, index) => {
-    if (index > 0) stream += "0 -16 Td\n";
+    if (index > 0) stream += `0 -${lineHeight} Td\n`;
     stream += `(${escapePdfText(line)}) Tj\n`;
   });
   return `${stream}ET\n`;
@@ -2815,13 +3591,28 @@ function exportTableHtml(tableData) {
 }
 
 function collectExportTables() {
-  return [...root.querySelectorAll("table")].map((tableElement, index) => ({
-    title: exportTitleForTable(tableElement, index),
-    headers: [...tableElement.querySelectorAll("thead th")].map(cellText),
-    rows: [...tableElement.querySelectorAll("tbody tr")].map(row =>
-      [...row.children].map(cellText)
-    )
-  }));
+  return [...root.querySelectorAll("table")].map((tableElement, index) => {
+    const headerCells = [...tableElement.querySelectorAll("thead th")];
+    const selectableColumns = headerCells
+      .map((header, columnIndex) => ({ header, columnIndex }))
+      .filter(({ header, columnIndex }) =>
+        normalizeLookup(cellText(header)) === "sel" ||
+        Boolean(tableElement.querySelector(`tbody tr td:nth-child(${columnIndex + 1}) .report-piece-select`))
+      )
+      .map(item => item.columnIndex);
+    const selectableSet = new Set(selectableColumns);
+    const bodyRows = [...tableElement.querySelectorAll("tbody tr")];
+    const selectedRows = bodyRows.filter(row => row.querySelector(".report-piece-select:checked"));
+    const rowsToExport = selectedRows.length ? selectedRows : bodyRows;
+
+    return {
+      title: exportTitleForTable(tableElement, index),
+      headers: headerCells.filter((_, columnIndex) => !selectableSet.has(columnIndex)).map(cellText),
+      rows: rowsToExport.map(row =>
+        [...row.children].filter((_, columnIndex) => !selectableSet.has(columnIndex)).map(cellText)
+      )
+    };
+  });
 }
 
 function exportTitleForTable(tableElement, index) {
@@ -3033,10 +3824,83 @@ function metric(label, value, tone = "") {
   return `<div class="metric"><span class="muted">${label}</span><strong>${value}</strong>${tone ? `<span class="badge ${tone}">${tone}</span>` : ""}</div>`;
 }
 
-function table(headers, rows) {
+function table(headers, rows, options = {}) {
   if (!rows.length) return `<div class="table-wrap empty-state">Sin registros</div>`;
-  const safeHeaders = headers.map(h => escapeHtml(h));
-  return `<div class="table-wrap"><table><thead><tr>${safeHeaders.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map((cell, index) => `<td data-label="${safeHeaders[index] || ""}">${cell ?? ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  const normalizedHeaders = options.selectableFirstColumn ? ["Sel.", ...headers] : headers;
+  const safeHeaders = normalizedHeaders.map(h => escapeHtml(h));
+  return `<div class="table-wrap"><table><thead><tr>${safeHeaders.map((h, index) => `<th aria-sort="none"><button class="table-sort-link" type="button" data-sort-column="${index}" data-sort-direction="none" title="Ordenar ascendente o descendente">${h}</button></th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map((cell, index) => `<td data-label="${safeHeaders[index] || ""}">${cellHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+function sortTableByColumn(tableElement, columnIndex) {
+  if (!tableElement || !Number.isInteger(columnIndex)) return;
+  const tbody = tableElement.querySelector("tbody");
+  if (!tbody) return;
+  const currentColumn = Number(tableElement.dataset.sortColumn);
+  const currentDirection = tableElement.dataset.sortDirection || "desc";
+  const nextDirection = currentColumn === columnIndex && currentDirection === "asc" ? "desc" : "asc";
+  const rows = [...tbody.querySelectorAll("tr")];
+
+  rows.sort((leftRow, rightRow) => {
+    const leftValue = tableSortValue(leftRow.children[columnIndex]);
+    const rightValue = tableSortValue(rightRow.children[columnIndex]);
+    const result = compareTableSortValues(leftValue, rightValue);
+    return nextDirection === "asc" ? result : -result;
+  });
+
+  rows.forEach(row => tbody.appendChild(row));
+  tableElement.dataset.sortColumn = String(columnIndex);
+  tableElement.dataset.sortDirection = nextDirection;
+  updateTableSortHeaders(tableElement, columnIndex, nextDirection);
+}
+
+function tableSortValue(cell) {
+  const text = cellText(cell || document.createElement("td"));
+  const number = parseLocalizedNumber(text);
+  if (number != null) return { type: "number", value: number };
+  const date = parseSortableDate(text);
+  if (date != null) return { type: "date", value: date };
+  return { type: "text", value: normalizeLookup(text) };
+}
+
+function compareTableSortValues(left, right) {
+  if (left.type === right.type && left.type !== "text") return left.value - right.value;
+  return String(left.value || "").localeCompare(String(right.value || ""), "es-MX", { numeric: true, sensitivity: "base" });
+}
+
+function parseLocalizedNumber(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const cleaned = text.replace(/[$,%\s]/g, "");
+  if (!/^-?\d+(?:[.,]\d+)?$|^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(cleaned)) return null;
+  const normalized = cleaned.includes(",") && !cleaned.includes(".") ? cleaned.replace(",", ".") : cleaned.replace(/,/g, "");
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
+function parseSortableDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  let match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (match) {
+    const [, year, month, day, hour = "00", minute = "00", second = "00"] = match;
+    return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+  }
+  match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (match) {
+    const [, day, month, rawYear, hour = "00", minute = "00", second = "00"] = match;
+    const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+    return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+  }
+  return null;
+}
+
+function updateTableSortHeaders(tableElement, columnIndex, direction) {
+  tableElement.querySelectorAll("thead th").forEach((header, index) => {
+    const isActive = index === columnIndex;
+    header.setAttribute("aria-sort", isActive ? (direction === "asc" ? "ascending" : "descending") : "none");
+    const button = header.querySelector(".table-sort-link");
+    if (button) button.dataset.sortDirection = isActive ? direction : "";
+  });
 }
 
 function options(items, valueField, labelField, selectedValue = null) {
@@ -3151,7 +4015,7 @@ function defaultCommitmentDate() {
 }
 
 function badge(value, tone) {
-  return `<span class="badge ${tone}">${escapeHtml(String(value))}</span>`;
+  return trustedHtml(`<span class="badge ${escapeHtml(tone)}">${escapeHtml(String(value))}</span>`);
 }
 
 function yesNo(value) {
@@ -3159,10 +4023,25 @@ function yesNo(value) {
 }
 
 function escapeHtml(value) {
-  return String(value)
+  return trustedHtml(String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replaceAll("'", "&#039;"));
+}
+
+function trustedHtml(value) {
+  return {
+    __trustedHtml: true,
+    value: String(value ?? ""),
+    toString() {
+      return this.value;
+    }
+  };
+}
+
+function cellHtml(value) {
+  if (value?.__trustedHtml) return value.value;
+  return escapeHtml(value ?? "").value;
 }

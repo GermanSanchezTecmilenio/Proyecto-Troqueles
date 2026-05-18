@@ -60,13 +60,14 @@ npm install
 
 ```properties
 SERVER_PORT=8080
+NODE_ENV=development
 
 DB_URL=jdbc:mysql://localhost:3306/tornos_sa_cv?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Mexico_City
-DB_USER=root
-DB_PASSWORD=1234
+DB_USER=tornos_app
+DB_PASSWORD=CAMBIAR_password_largo_base_datos
 
 APP_BOOTSTRAP_ADMIN_USERNAME=admin
-APP_BOOTSTRAP_ADMIN_PASSWORD=AdminLocal2026!
+APP_BOOTSTRAP_ADMIN_PASSWORD=CAMBIAR_Admin_2026!
 APP_BOOTSTRAP_ADMIN_DISPLAY_NAME=Administrador
 APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=false
 ```
@@ -109,7 +110,32 @@ Arranca una vez la aplicacion y despues regresa el valor a `false`.
 | `npm start` | Arranca el sistema en `SERVER_PORT`. |
 | `npm run dev` | Arranca con `node --watch`. |
 | `npm run check` | Revisa sintaxis de `src/server.js`. |
+| `npm run review:ai` | Genera una revision IA tecnica del repo, sin integrarse al frontend. |
 | `npm audit` | Revisa vulnerabilidades npm. |
+
+## Revision IA Tecnica
+
+La herramienta IA vive fuera de la aplicacion web. Su objetivo es revisar codigo, seguridad de codigo, infraestructura y arquitectura del repositorio. No lee `.env`, `node_modules`, `logs` ni `uploads`, pero si envia contexto tecnico del repo al proveedor configurado por `OPENAI_API_KEY`.
+
+Configura en `.env`:
+
+```properties
+OPENAI_API_KEY=tu_api_key
+AI_REVIEW_OUTPUT=docs/ai-review-report.md
+AI_REVIEW_MAX_CONTEXT_CHARS=120000
+```
+
+Ejecuta:
+
+```powershell
+npm run review:ai
+```
+
+Tambien puedes enfocar la revision:
+
+```powershell
+npm run review:ai -- --focus="seguridad y arquitectura"
+```
 
 ## Prueba Rapida de APIs
 
@@ -130,7 +156,7 @@ La mayoria de rutas `/api/**` requiere token Bearer. Para probar desde PowerShel
 ```powershell
 $loginBody = @{
   username = "admin"
-  password = "AdminLocal2026!"
+  password = "VALOR_DE_APP_BOOTSTRAP_ADMIN_PASSWORD"
 } | ConvertTo-Json
 
 $login = Invoke-RestMethod `
@@ -223,9 +249,12 @@ Si el despliegue muestra el mensaje antiguo `ZSISTEMA_API_BASE_URL`, vuelve a de
 ## Seguridad Integrada
 
 - Las rutas bajo `/api/**` requieren `Authorization: Bearer <token>`, excepto `POST /api/auth/login`.
+- El backend valida permisos por modulo y accion antes de ejecutar rutas operativas.
 - Los passwords se almacenan con BCrypt usando `bcryptjs`.
 - Los tokens son opacos, se generan con `crypto.randomBytes` y viven en memoria del proceso Node.
 - El tiempo de vida del token se controla con `APP_TOKEN_TTL_MINUTES`.
+- El login aplica bloqueo por intentos fallidos y rate limiting por IP/usuario.
+- En produccion (`NODE_ENV=production`) la conexion a MySQL debe usar TLS validado y `APP_ALLOWED_ORIGINS` debe estar configurado.
 - Los roles se guardan en `user_roles`; por defecto el bootstrap crea `ADMIN` y `OPERADOR`.
 - `.env` nunca debe publicarse ni compartirse.
 - `APP_ALLOWED_ORIGINS` permite limitar CORS cuando el frontend vive en otro dominio.
