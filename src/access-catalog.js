@@ -1,4 +1,4 @@
-export const ACCESS_ACTION_KEYS = ["canView", "canCreate", "canUpdate", "canDelete", "canImport", "canExport"];
+export const ACCESS_ACTION_KEYS = ["canView", "canCreate", "canUpdate", "canDelete", "canExport"];
 
 export const ACCESS_CATALOG = [
   { id: "dashboard", label: "Dashboard", group: "Principal", type: "module" },

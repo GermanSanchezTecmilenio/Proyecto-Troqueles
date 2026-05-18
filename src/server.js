@@ -369,8 +369,8 @@ app.put("/api/ajustes/accesos/:codigo", requireAccess("ajustes", "canUpdate"), a
     for (const acceso of accesos) {
       await conn.query(
         `INSERT INTO perfil_accesos
-          (perfil_codigo, modulo, can_view, can_create, can_update, can_delete, can_import, can_export)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          (perfil_codigo, modulo, can_view, can_create, can_update, can_delete, can_export)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           codigo,
           acceso.modulo,
@@ -378,7 +378,6 @@ app.put("/api/ajustes/accesos/:codigo", requireAccess("ajustes", "canUpdate"), a
           acceso.canCreate,
           acceso.canUpdate,
           acceso.canDelete,
-          acceso.canImport,
           acceso.canExport
         ]
       );
@@ -1257,7 +1256,7 @@ async function getUsuarioAjustes(id) {
 async function listProfileAccess() {
   const rows = await all(
     `SELECT perfil_codigo AS perfilCodigo, modulo, can_view AS canView, can_create AS canCreate,
-            can_update AS canUpdate, can_delete AS canDelete, can_import AS canImport, can_export AS canExport
+            can_update AS canUpdate, can_delete AS canDelete, can_export AS canExport
        FROM perfil_accesos
       ORDER BY perfil_codigo ASC, modulo ASC`
   );
@@ -1275,8 +1274,8 @@ async function insertDefaultProfileAccess(codigo) {
   for (const acceso of defaults) {
     await exec(
       `INSERT IGNORE INTO perfil_accesos
-        (perfil_codigo, modulo, can_view, can_create, can_update, can_delete, can_import, can_export)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (perfil_codigo, modulo, can_view, can_create, can_update, can_delete, can_export)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         normalizedCode,
         acceso.modulo,
@@ -1284,7 +1283,6 @@ async function insertDefaultProfileAccess(codigo) {
         acceso.canCreate,
         acceso.canUpdate,
         acceso.canDelete,
-        acceso.canImport,
         acceso.canExport
       ]
     );
@@ -1305,7 +1303,6 @@ async function accessForRoles(roles) {
             MAX(can_create) AS canCreate,
             MAX(can_update) AS canUpdate,
             MAX(can_delete) AS canDelete,
-            MAX(can_import) AS canImport,
             MAX(can_export) AS canExport
        FROM perfil_accesos
       WHERE perfil_codigo IN (${placeholders(normalizedRoles)})
@@ -1341,7 +1338,6 @@ function accessDto(row) {
     canCreate: Boolean(row.canCreate),
     canUpdate: Boolean(row.canUpdate),
     canDelete: Boolean(row.canDelete),
-    canImport: Boolean(row.canImport),
     canExport: Boolean(row.canExport)
   };
 }

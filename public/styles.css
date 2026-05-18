@@ -408,46 +408,6 @@ label {
   flex-wrap: wrap;
 }
 
-.export-button {
-  min-width: 76px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: .45rem;
-  background: #fff;
-  color: var(--primary-strong);
-  border-color: #69b7e5;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.export-button:hover {
-  background: var(--primary-soft);
-  border-color: var(--primary);
-}
-
-.export-button[data-icon]::after {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-}
-
-.export-button[data-icon="down"]::after {
-  transform: rotate(45deg);
-  margin-top: -4px;
-}
-
-.export-button[data-icon="up"]::after {
-  transform: rotate(225deg);
-  margin-top: 4px;
-}
-
-.export-button[data-import] {
-  min-width: 156px;
-}
-
 .toolbar-status {
   min-width: 120px;
   color: var(--muted);
@@ -1249,47 +1209,9 @@ label {
   font-weight: 800;
 }
 
-.activity-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
-  gap: var(--space-3);
-}
-
-.activity-card {
-  display: grid;
-  gap: .65rem;
-  padding: var(--space-3);
-  border: 1px solid var(--line);
-  border-left: 4px solid var(--primary);
-  border-radius: var(--radius);
-  background: #fff;
-}
-
-.activity-card h3,
-.activity-card p {
-  margin: 0;
-}
-
-.activity-card h3 {
-  color: var(--primary-strong);
-}
-
-.activity-card p,
-.activity-meta,
 .activity-hint {
   color: var(--muted);
   font-weight: 700;
-}
-
-.activity-meta {
-  display: grid;
-  gap: .25rem;
-  font-size: .82rem;
-}
-
-.activity-card a {
-  color: var(--primary);
-  font-weight: 900;
 }
 
 .activity-hint {
@@ -2103,7 +2025,6 @@ td button.secondary {
     width: 100%;
   }
 
-  .export-button[data-import],
   .toolbar-status {
     min-width: 0;
   }
