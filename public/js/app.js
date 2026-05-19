@@ -1670,7 +1670,7 @@ async function handleMonitorShortcut(action) {
   }
 }
 
-function openMonitorDrawing(piezaId) {
+async function openMonitorDrawing(piezaId) {
   const pieza = selectedMonitorPiece();
   if (!pieza) {
     setMonitorMessage(`No se encontro detalle de la pieza ${piezaId}.`, "error");
@@ -1678,9 +1678,19 @@ function openMonitorDrawing(piezaId) {
   }
   if (pieza.archivo) {
     const archivo = String(pieza.archivo);
-    const href = /^(https?:)?\/\//.test(archivo) || archivo.startsWith("/") ? archivo : `/${archivo.replace(/^\/+/, "")}`;
-    window.open(href, "_blank", "noopener");
-    setMonitorMessage(`F2 abrio el dibujo de la pieza ${piezaId}.`);
+    if (/^(https?:)?\/\//.test(archivo)) {
+      window.open(archivo, "_blank", "noopener");
+      setMonitorMessage(`F2 abrio el dibujo de la pieza ${piezaId}.`);
+      return;
+    }
+    const href = archivo.startsWith("/") ? archivo : `/${archivo.replace(/^\/+/, "")}`;
+    try {
+      const blob = await api(href);
+      window.open(URL.createObjectURL(blob), "_blank", "noopener");
+      setMonitorMessage(`F2 abrio el dibujo de la pieza ${piezaId}.`);
+    } catch (error) {
+      setMonitorMessage(error.message, "error");
+    }
     return;
   }
   const dibujo = pieza.noDibujo ? ` Dibujo registrado: ${pieza.noDibujo}.` : "";

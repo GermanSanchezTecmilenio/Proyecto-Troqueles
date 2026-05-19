@@ -193,15 +193,17 @@ Invoke-RestMethod "http://localhost:8080/api/facturas" -Headers $headers
 
 ## Publicacion en Netlify
 
-Netlify sirve correctamente el frontend estatico, pero no ejecuta este backend Node/Express ni levanta MySQL como servidor permanente.
+Netlify publica el frontend estatico y redirige `/api/**` a una Netlify Function que ejecuta el backend Express. La base de datos debe ser remota; para Aiven for MySQL usa la URI del servicio con SSL.
 
 Para Netlify se agrego:
 
 | Archivo | Uso |
 |---|---|
-| `netlify.toml` | Indica que Netlify publique `public/` y redirija rutas al `index.html`. |
+| `netlify.toml` | Publica `public/`, registra `netlify/functions` y redirige `/api/**` a la funcion. |
+| `netlify/functions/api.mjs` | Adaptador serverless para Express. |
 | `scripts/write-netlify-config.mjs` | Genera `public/config.js` con la URL del backend. |
 | `public/config.js` | Archivo generado durante build; define `window.TORNOS_API_BASE_URL`. |
+| `db/migrations/V18__netlify_aiven_runtime_storage.sql` | Agrega sesiones persistentes y almacenamiento de dibujos en MySQL para Netlify. |
 
 Configuracion recomendada en Netlify:
 
@@ -209,11 +211,27 @@ Configuracion recomendada en Netlify:
 |---|---|
 | Build command | `node scripts/write-netlify-config.mjs` |
 | Publish directory | `public` |
-| Environment variable | `TORNOS_API_BASE_URL=https://URL-DE-TU-BACKEND` |
+| Functions directory | `netlify/functions` |
 
-El backend debe hospedarse aparte en un servicio que soporte Node.js persistente y MySQL, por ejemplo Render, Railway, Azure App Service, Azure Container Apps o un VPS. Si no defines `TORNOS_API_BASE_URL`, el frontend intentara llamar `/api/**` en el mismo dominio de Netlify y el login no funcionara.
+Variables minimas para Netlify + Aiven:
 
-Si el despliegue muestra el mensaje antiguo `ZSISTEMA_API_BASE_URL`, vuelve a desplegar Netlify con la rama actual. El build tambien acepta `ZSISTEMA_API_BASE_URL` como alias para compatibilidad.
+```properties
+NODE_ENV=production
+DB_URL=mysql://avnadmin:TU_PASSWORD@TU_HOST_AIVEN:TU_PUERTO/defaultdb?ssl-mode=REQUIRED
+DB_SSL=true
+DB_SSL_CA_BASE64=BASE64_DEL_CA_PEM_DE_AIVEN
+APP_BOOTSTRAP_ADMIN_USERNAME=admin
+APP_BOOTSTRAP_ADMIN_PASSWORD=CAMBIAR_Admin_2026!
+APP_SESSION_STORAGE=database
+APP_UPLOAD_STORAGE=database
+DB_POOL_SIZE=2
+```
+
+`APP_ALLOWED_ORIGINS` puede quedar vacio en Netlify si usas el mismo dominio, porque la funcion toma `URL` y `DEPLOY_PRIME_URL` del ambiente. Si usas dominio personalizado o backend externo, define el origen exacto, por ejemplo `https://tusitio.com`.
+
+`TORNOS_API_BASE_URL` ya no es obligatorio cuando el backend corre como Netlify Function en el mismo sitio. Solo usalo si decides hospedar el backend en otro servicio y quieres que Netlify sea un frontend estatico apuntando a esa URL.
+
+El primer acceso a la funcion aplica migraciones pendientes en Aiven. Esto crea tablas faltantes, pero no copia automaticamente datos desde tu MySQL local; para conservar informacion local debes exportarla e importarla en Aiven con una herramienta MySQL antes o despues del despliegue.
 
 ## Endpoints Principales
 
@@ -251,7 +269,7 @@ Si el despliegue muestra el mensaje antiguo `ZSISTEMA_API_BASE_URL`, vuelve a de
 - Las rutas bajo `/api/**` requieren `Authorization: Bearer <token>`, excepto `POST /api/auth/login`.
 - El backend valida permisos por modulo y accion antes de ejecutar rutas operativas.
 - Los passwords se almacenan con BCrypt usando `bcryptjs`.
-- Los tokens son opacos, se generan con `crypto.randomBytes` y viven en memoria del proceso Node.
+- Los tokens son opacos, se generan con `crypto.randomBytes`; en servidor local viven en memoria y en Netlify pueden persistirse en MySQL con `APP_SESSION_STORAGE=database`.
 - El tiempo de vida del token se controla con `APP_TOKEN_TTL_MINUTES`.
 - El login aplica bloqueo por intentos fallidos y rate limiting por IP/usuario.
 - En produccion (`NODE_ENV=production`) la conexion a MySQL debe usar TLS validado y `APP_ALLOWED_ORIGINS` debe estar configurado.
@@ -259,7 +277,7 @@ Si el despliegue muestra el mensaje antiguo `ZSISTEMA_API_BASE_URL`, vuelve a de
 - `.env` nunca debe publicarse ni compartirse.
 - `APP_ALLOWED_ORIGINS` permite limitar CORS cuando el frontend vive en otro dominio.
 - En produccion se recomienda usar HTTPS mediante proxy o balanceador.
-- Para invalidar todas las sesiones activas, reinicia el proceso Node.
+- Para invalidar todas las sesiones activas en local, reinicia el proceso Node; en Netlify elimina registros de `user_sessions` o rota el password de usuarios.
 
 ## Base de Datos y Migraciones
 
@@ -309,34 +327,18 @@ Get-Service | Where-Object { $_.Name -match "mysql" }
 
 Tambien confirma que `.env` tenga `DB_USER`, `DB_PASSWORD` y `DB_URL` correctos.
 
-### En Netlify aparece Error 404 al iniciar sesion
+### En Netlify no inicia sesion
 
-Significa que el frontend esta publicado, pero no hay backend disponible en ese dominio. Netlify esta sirviendo `public/`, pero `/api/auth/login` no existe ahi.
+Revisa el log de Functions en Netlify. Las causas comunes son:
 
-Solucion:
-
-1. Publica el backend Node/MySQL en otro servicio.
-2. Copia la URL publica del backend.
-3. En Netlify, configura la variable:
-
-```text
-TORNOS_API_BASE_URL=https://URL-DE-TU-BACKEND
-```
-
-4. Vuelve a desplegar en Netlify.
-
-### En Netlify aparece "API no configurada"
-
-Configura en Netlify:
-
-```text
-TORNOS_API_BASE_URL=https://URL-DE-TU-BACKEND
-```
-
-Despues ejecuta un redeploy. La URL debe apuntar al backend Node publicado, no a MySQL ni al sitio de Netlify.
+- `DB_URL`, `DB_SSL` o `DB_SSL_CA_BASE64` no apuntan a Aiven correctamente.
+- `APP_BOOTSTRAP_ADMIN_PASSWORD` no esta definido.
+- Aiven todavia no tiene los datos importados desde MySQL local.
+- El primer arranque fallo aplicando migraciones por permisos o por una tabla ya modificada manualmente.
 
 ## Documentacion Complementaria
 
 - [APIs REST](docs/api-rest.md)
 - [Modelo de datos](docs/modelo-datos-inicial.md)
 - [Seguridad operativa](docs/seguridad.md)
+- [Netlify + Aiven for MySQL](docs/aiven-netlify.md)

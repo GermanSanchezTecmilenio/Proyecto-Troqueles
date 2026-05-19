@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import multer from "multer";
 import mysql from "mysql2/promise";
 import { ACCESS_ACTION_KEYS, ACCESS_CATALOG } from "./access-catalog.js";
@@ -21,7 +21,8 @@ const TORNOS_INTERNAL_PIEZA_ID = 2460;
 const DEFAULT_DB_NAME = "tornos_sa_cv";
 const IVA_RATE = 0.16;
 const IS_PRODUCTION = String(process.env.NODE_ENV || "").toLowerCase() === "production";
-const UPLOAD_EXTENSIONS = new Set([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dxf", ".dwg"]);
+const IS_SERVERLESS = Boolean(process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const UPLOAD_EXTENSIONS = new Set([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".dxf", ".dwg", ".step", ".stp"]);
 const UPLOAD_MIME_TYPES = new Set([
   "application/pdf",
   "image/png",
@@ -33,10 +34,16 @@ const UPLOAD_MIME_TYPES = new Set([
   "application/x-acad",
   "application/dxf",
   "application/x-dxf",
+  "application/step",
+  "application/x-step",
+  "application/iges",
+  "model/step",
+  "model/iges",
   "application/octet-stream"
 ]);
 let pool;
 const sessions = new Map();
+let initializationPromise;
 
 const config = {
   port: Number(process.env.SERVER_PORT || 8080),
@@ -49,31 +56,16 @@ const config = {
   loginMaxFailedAttempts: Number(process.env.APP_LOGIN_MAX_FAILED_ATTEMPTS || 5),
   loginRateLimitWindowMs: Number(process.env.APP_LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
   loginRateLimitMax: Number(process.env.APP_LOGIN_RATE_LIMIT_MAX || 10),
-  allowedOrigins: (process.env.APP_ALLOWED_ORIGINS || "").split(",").map(item => item.trim()).filter(Boolean),
+  allowedOrigins: buildAllowedOrigins(),
+  sessionStorage: parseStorageMode(process.env.APP_SESSION_STORAGE || (IS_SERVERLESS ? "database" : "memory"), "memory"),
+  uploadStorage: parseStorageMode(process.env.APP_UPLOAD_STORAGE || (IS_SERVERLESS ? "database" : "filesystem"), "filesystem"),
   db: parseDbConfig()
 };
 
 const loginAttempts = new Map();
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: async (req, file, cb) => {
-      try {
-        await fs.mkdir(uploadsDir, { recursive: true });
-        cb(null, uploadsDir);
-      } catch (error) {
-        cb(error);
-      }
-    },
-    filename: (req, file, cb) => {
-      const extension = safeUploadExtension(file.originalname);
-      const baseName = path.basename(file.originalname || "dibujo", path.extname(file.originalname || ""))
-        .replace(/[^A-Za-z0-9._-]/g, "_")
-        .slice(0, 80);
-      const safeName = `${baseName || "dibujo"}${extension}`;
-      cb(null, `${crypto.randomUUID()}_${safeName || "dibujo"}`);
-    }
-  }),
+  storage: uploadStorageEngine(),
   fileFilter: (req, file, cb) => {
     const extension = safeUploadExtension(file.originalname);
     const mimeType = String(file.mimetype || "").toLowerCase();
@@ -137,14 +129,15 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
   const roles = await userRoles(user.id);
   const access = await accessForRoles(roles);
   const token = crypto.randomBytes(Number(process.env.APP_TOKEN_RANDOM_BYTES || 48)).toString("base64url");
-  sessions.set(token, {
+  const session = {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
     roles,
     access,
     expiresAt: Date.now() + config.tokenTtlMinutes * 60 * 1000
-  });
+  };
+  await saveSession(token, session);
   clearFailedLogin(req, username);
   await exec("UPDATE users SET failed_attempts = 0, locked = FALSE, last_login_at = CURRENT_TIMESTAMP(6) WHERE id = ?", [user.id]);
   await audit(user.username, "LOGIN", "Sesion iniciada");
@@ -160,7 +153,7 @@ app.get("/api/auth/me", asyncHandler(async (req, res) => {
 }));
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
-  sessions.delete(req.token);
+  await deleteSession(req.token);
   res.status(204).end();
 }));
 
@@ -190,7 +183,7 @@ app.put("/api/ajustes/perfiles/:codigo", requireAccess("ajustes", "canUpdate"), 
     "UPDATE perfiles_usuario SET nombre = ?, descripcion = ?, activo = ? WHERE codigo = ?",
     [required(req.body.nombre, "Nombre de perfil requerido"), emptyToNull(req.body.descripcion), bool(req.body.activo, true), codigo]
   );
-  if (!bool(req.body.activo, true)) dropRoleSessions(codigo);
+  if (!bool(req.body.activo, true)) await dropRoleSessions(codigo);
   await audit(req.user.username, "PERFIL_ACTUALIZADO", `Perfil ${codigo}`);
   res.json(await getPerfilUsuario(codigo));
 }));
@@ -200,7 +193,7 @@ app.put("/api/ajustes/perfiles/:codigo/estado", requireAccess("ajustes", "canUpd
   if (codigo === "ADMIN" && !bool(req.body.activo, true)) throw httpError(400, "No se puede dar de baja el perfil ADMIN");
   await getPerfilUsuario(codigo);
   await exec("UPDATE perfiles_usuario SET activo = ? WHERE codigo = ?", [bool(req.body.activo, true), codigo]);
-  if (!bool(req.body.activo, true)) dropRoleSessions(codigo);
+  if (!bool(req.body.activo, true)) await dropRoleSessions(codigo);
   await audit(req.user.username, "PERFIL_ESTADO", `Perfil ${codigo}`);
   res.json(await getPerfilUsuario(codigo));
 }));
@@ -210,7 +203,7 @@ app.delete("/api/ajustes/perfiles/:codigo", requireAccess("ajustes", "canDelete"
   if (codigo === "ADMIN") throw httpError(400, "No se puede dar de baja el perfil ADMIN");
   await getPerfilUsuario(codigo);
   await exec("UPDATE perfiles_usuario SET activo = FALSE WHERE codigo = ?", [codigo]);
-  dropRoleSessions(codigo);
+  await dropRoleSessions(codigo);
   await audit(req.user.username, "PERFIL_BAJA", `Perfil ${codigo}`);
   res.status(204).end();
 }));
@@ -223,7 +216,7 @@ app.delete("/api/ajustes/perfiles/:codigo/eliminar", requireAccess("ajustes", "c
     throw httpError(409, "No se puede eliminar un perfil asignado a usuarios. Primero retira ese perfil de las cuentas.");
   }
   await exec("DELETE FROM perfiles_usuario WHERE codigo = ?", [codigo]);
-  dropRoleSessions(codigo);
+  await dropRoleSessions(codigo);
   await audit(req.user.username, "PERFIL_ELIMINADO", `Perfil ${codigo}`);
   res.status(204).end();
 }));
@@ -309,7 +302,7 @@ app.put("/api/ajustes/usuarios/:id/estado", requireAccess("ajustes", "canUpdate"
   const user = await getUsuarioAjustes(id);
   await ensureAdminAccountRemains(id, active, user.roles);
   await exec("UPDATE users SET active = ?, locked = CASE WHEN ? THEN locked ELSE TRUE END WHERE id = ?", [active, active, id]);
-  if (!active) dropUserSessions(id);
+  if (!active) await dropUserSessions(id);
   await audit(req.user.username, active ? "USUARIO_ACTIVADO" : "USUARIO_BAJA", `Usuario ${id}`);
   res.json(await getUsuarioAjustes(id));
 }));
@@ -319,7 +312,7 @@ app.delete("/api/ajustes/usuarios/:id", requireAccess("ajustes", "canDelete"), a
   const user = await getUsuarioAjustes(id);
   await ensureAdminAccountRemains(id, false, user.roles);
   await exec("UPDATE users SET active = FALSE, locked = TRUE WHERE id = ?", [id]);
-  dropUserSessions(id);
+  await dropUserSessions(id);
   await audit(req.user.username, "USUARIO_BAJA", `Usuario ${id}`);
   res.status(204).end();
 }));
@@ -332,7 +325,7 @@ app.put("/api/ajustes/usuarios/:id/password", requireAccess("ajustes", "canUpdat
     "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP(6), failed_attempts = 0, locked = FALSE WHERE id = ?",
     [passwordHash, id]
   );
-  dropUserSessions(id, req.token);
+  await dropUserSessions(id, req.token);
   await audit(req.user.username, "USUARIO_PASSWORD", `Usuario ${id}`);
   res.json(await getUsuarioAjustes(id));
 }));
@@ -544,11 +537,21 @@ app.post("/api/piezas", requireAccess("piezas", "canCreate"), asyncHandler(async
 
 app.post("/api/piezas/dibujos", requireAccess("piezas", "canCreate"), upload.single("archivo"), asyncHandler(async (req, res) => {
   if (!req.file) throw httpError(400, "Selecciona un dibujo para importar");
+  const stored = await storeDrawingFile(req.file, req.user.username);
   res.status(201).json({
-    archivo: `uploads/dibujos/${req.file.filename}`,
+    archivo: stored.archivo,
     nombreOriginal: req.file.originalname
   });
 }));
+
+const drawingReadAccess = requireAnyAccess(
+  { moduleId: "piezas", actionKey: "canView" },
+  { moduleId: "monitor", actionKey: "canView" },
+  { moduleId: "reportes", actionKey: "canView" }
+);
+
+app.get("/api/piezas/dibujos/:id", drawingReadAccess, asyncHandler(sendStoredDrawing));
+app.get("/api/piezas/dibujos/:id/:filename", drawingReadAccess, asyncHandler(sendStoredDrawing));
 
 app.get("/api/piezas/:id/pdf", requireAnyAccess(
   { moduleId: "piezas", actionKey: "canExport" },
@@ -1042,9 +1045,30 @@ app.use((error, req, res, next) => {
   res.status(status).json({ message });
 });
 
-await start();
+if (isMainModule()) {
+  await start();
+}
+
+export { app, initializeApplication, start };
 
 async function start() {
+  await initializeApplication();
+  app.listen(config.port, () => {
+    console.log(`Tornos SA de CV Node escuchando en http://localhost:${config.port}`);
+  });
+}
+
+async function initializeApplication() {
+  if (!initializationPromise) {
+    initializationPromise = initializeRuntime().catch(error => {
+      initializationPromise = null;
+      throw error;
+    });
+  }
+  return initializationPromise;
+}
+
+async function initializeRuntime() {
   if (!config.adminPassword) {
     throw new Error("APP_BOOTSTRAP_ADMIN_PASSWORD es requerido. Define .env antes de iniciar.");
   }
@@ -1059,33 +1083,30 @@ async function start() {
   }
   pool = createDbPool({ multipleStatements: false });
   await bootstrapAdmin();
-  app.listen(config.port, () => {
-    console.log(`Tornos SA de CV Node escuchando en http://localhost:${config.port}`);
-  });
 }
 
 function createDbPool({ multipleStatements = false } = {}) {
   return mysql.createPool({
     ...config.db,
     waitForConnections: true,
-    connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
+    connectionLimit: Number(process.env.DB_POOL_SIZE || (IS_SERVERLESS ? 2 : 10)),
     multipleStatements,
     dateStrings: true
   });
 }
 
 function parseDbConfig() {
-  const jdbc = process.env.DB_URL || "";
-  if (jdbc) {
-    const url = new URL(jdbc.replace(/^jdbc:/, ""));
+  const dbUrl = connectionUrl();
+  if (dbUrl) {
+    const url = new URL(dbUrl.replace(/^jdbc:/, ""));
     return {
       host: url.hostname || "localhost",
       port: Number(url.port || 3306),
       database: url.pathname.replace(/^\//, "") || DEFAULT_DB_NAME,
-      user: process.env.DB_USER || url.username || "tornos_app",
-      password: process.env.DB_PASSWORD || url.password || "",
+      user: process.env.DB_USER || decodeUrlCredential(url.username) || "tornos_app",
+      password: process.env.DB_PASSWORD || decodeUrlCredential(url.password) || "",
       charset: "utf8mb4",
-      ssl: url.searchParams.get("useSSL") === "true" ? dbSslConfig() : undefined
+      ssl: dbUrlRequiresSsl(url) ? dbSslConfig() : undefined
     };
   }
   return {
@@ -1095,21 +1116,118 @@ function parseDbConfig() {
     user: process.env.DB_USER || "tornos_app",
     password: process.env.DB_PASSWORD || "",
     charset: "utf8mb4",
-    ssl: String(process.env.DB_SSL || "false").toLowerCase() === "true" ? dbSslConfig() : undefined
+    ssl: dbEnvRequiresSsl() ? dbSslConfig() : undefined
   };
 }
 
 function dbSslConfig() {
   const rejectUnauthorized = String(process.env.DB_SSL_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
   const caFile = process.env.DB_SSL_CA_FILE;
+  const ca = dbSslCa();
   return {
     rejectUnauthorized,
-    ...(caFile ? { ca: fsSyncRead(caFile) } : {})
+    ...(ca ? { ca } : caFile ? { ca: fsSyncRead(caFile) } : {})
   };
+}
+
+function connectionUrl() {
+  return process.env.DB_URL || process.env.DATABASE_URL || process.env.MYSQL_URL || process.env.MYSQL_URI || process.env.AIVEN_MYSQL_URI || "";
+}
+
+function decodeUrlCredential(value) {
+  try {
+    return decodeURIComponent(value || "");
+  } catch {
+    return value || "";
+  }
+}
+
+function dbUrlRequiresSsl(url) {
+  if (process.env.DB_SSL != null) return envFlag(process.env.DB_SSL);
+  const mode = (url.searchParams.get("ssl-mode") || url.searchParams.get("sslmode") || "").toLowerCase();
+  if (mode) return !["disabled", "disable", "false", "0"].includes(mode);
+  const useSsl = url.searchParams.get("useSSL") ?? url.searchParams.get("ssl");
+  if (useSsl != null) return envFlag(useSsl);
+  return url.hostname.includes("aivencloud.com");
+}
+
+function dbEnvRequiresSsl() {
+  if (process.env.DB_SSL != null) return envFlag(process.env.DB_SSL);
+  return String(process.env.DB_HOST || "").includes("aivencloud.com");
+}
+
+function dbSslCa() {
+  if (process.env.DB_SSL_CA_BASE64) {
+    return Buffer.from(process.env.DB_SSL_CA_BASE64, "base64").toString("utf8");
+  }
+  if (process.env.DB_SSL_CA) {
+    return process.env.DB_SSL_CA.replace(/\\n/g, "\n");
+  }
+  return "";
 }
 
 function fsSyncRead(filePath) {
   return readFileSync(path.resolve(projectRoot, filePath), "utf8");
+}
+
+function buildAllowedOrigins() {
+  const origins = new Set();
+  for (const item of String(process.env.APP_ALLOWED_ORIGINS || "").split(",")) {
+    const origin = normalizeOrigin(item);
+    if (origin) origins.add(origin);
+  }
+  if (IS_SERVERLESS) {
+    for (const item of [process.env.URL, process.env.DEPLOY_PRIME_URL]) {
+      const origin = normalizeOrigin(item);
+      if (origin) origins.add(origin);
+    }
+  }
+  return [...origins];
+}
+
+function normalizeOrigin(value) {
+  const text = String(value || "").trim().replace(/\/+$/, "");
+  if (!text) return "";
+  try {
+    return new URL(text).origin;
+  } catch {
+    return text;
+  }
+}
+
+function parseStorageMode(value, fallback) {
+  const mode = String(value || fallback || "").trim().toLowerCase();
+  if (["database", "db", "mysql"].includes(mode)) return "database";
+  if (["filesystem", "file", "files", "disk"].includes(mode)) return "filesystem";
+  if (["memory", "mem"].includes(mode)) return "memory";
+  return fallback;
+}
+
+function uploadStorageEngine() {
+  if (config.uploadStorage === "database") {
+    return multer.memoryStorage();
+  }
+  return multer.diskStorage({
+    destination: async (req, file, cb) => {
+      try {
+        await fs.mkdir(uploadsDir, { recursive: true });
+        cb(null, uploadsDir);
+      } catch (error) {
+        cb(error);
+      }
+    },
+    filename: (req, file, cb) => {
+      cb(null, `${crypto.randomUUID()}_${safeStorageFilename(file.originalname)}`);
+    }
+  });
+}
+
+function envFlag(value) {
+  return ["1", "true", "yes", "required", "require", "verify_ca", "verify-ca", "verify_identity", "verify-identity"].includes(String(value || "").toLowerCase());
+}
+
+function isMainModule() {
+  return Boolean(process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href);
 }
 
 async function ensureDatabase() {
@@ -1347,6 +1465,7 @@ function defaultAccess(value) {
 }
 
 async function refreshAccessSessionsForRole(role) {
+  if (config.sessionStorage === "database") return;
   const targetRole = profileCode(role);
   for (const session of sessions.values()) {
     if (session.roles?.some(item => profileCode(item) === targetRole)) {
@@ -1387,7 +1506,17 @@ async function ensureAdminAccountRemains(userId, nextActive, nextRoles) {
   }
 }
 
-function dropUserSessions(userId, keepToken = null) {
+async function dropUserSessions(userId, keepToken = null) {
+  if (config.sessionStorage === "database") {
+    const params = [userId];
+    let keepClause = "";
+    if (keepToken) {
+      keepClause = " AND token_hash <> ?";
+      params.push(sessionTokenHash(keepToken));
+    }
+    await exec(`DELETE FROM user_sessions WHERE user_id = ?${keepClause}`, params);
+    return;
+  }
   for (const [token, session] of sessions.entries()) {
     if (Number(session.id) === Number(userId) && token !== keepToken) {
       sessions.delete(token);
@@ -1395,8 +1524,18 @@ function dropUserSessions(userId, keepToken = null) {
   }
 }
 
-function dropRoleSessions(role) {
+async function dropRoleSessions(role) {
   const targetRole = profileCode(role);
+  if (config.sessionStorage === "database") {
+    await exec(
+      `DELETE s
+         FROM user_sessions s
+         JOIN user_roles ur ON ur.user_id = s.user_id
+        WHERE ur.role = ?`,
+      [targetRole]
+    );
+    return;
+  }
   for (const [token, session] of sessions.entries()) {
     if (session.roles?.some(item => profileCode(item) === targetRole)) {
       sessions.delete(token);
@@ -2374,14 +2513,75 @@ function loginKey(req, username) {
 function authRequired(req, res, next) {
   const match = String(req.headers.authorization || "").match(/^Bearer\s+(.+)$/i);
   const token = match?.[1];
-  const session = token ? sessions.get(token) : null;
-  if (!session || session.expiresAt < Date.now()) {
-    if (token) sessions.delete(token);
-    return res.status(401).json({ message: "Sesion no valida" });
+  resolveSession(token)
+    .then(session => {
+      if (!session) {
+        return res.status(401).json({ message: "Sesion no valida" });
+      }
+      req.token = token;
+      req.user = session;
+      next();
+    })
+    .catch(next);
+}
+
+async function saveSession(token, session) {
+  if (config.sessionStorage === "database") {
+    await exec("DELETE FROM user_sessions WHERE expires_at_ms < ?", [Date.now()]);
+    await exec(
+      `INSERT INTO user_sessions (token_hash, user_id, expires_at_ms)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), expires_at_ms = VALUES(expires_at_ms)`,
+      [sessionTokenHash(token), session.id, session.expiresAt]
+    );
+    return;
   }
-  req.token = token;
-  req.user = session;
-  next();
+  sessions.set(token, session);
+}
+
+async function deleteSession(token) {
+  if (!token) return;
+  if (config.sessionStorage === "database") {
+    await exec("DELETE FROM user_sessions WHERE token_hash = ?", [sessionTokenHash(token)]);
+    return;
+  }
+  sessions.delete(token);
+}
+
+async function resolveSession(token) {
+  if (!token) return null;
+  if (config.sessionStorage === "database") {
+    const row = await one(
+      `SELECT s.user_id AS id, s.expires_at_ms AS expiresAt, u.username, u.display_name AS displayName, u.active, u.locked
+         FROM user_sessions s
+         JOIN users u ON u.id = s.user_id
+        WHERE s.token_hash = ?`,
+      [sessionTokenHash(token)]
+    );
+    if (!row || Number(row.expiresAt || 0) < Date.now() || !row.active || row.locked) {
+      await deleteSession(token);
+      return null;
+    }
+    const roles = await userRoles(row.id);
+    return {
+      id: row.id,
+      username: row.username,
+      displayName: row.displayName,
+      roles,
+      access: await accessForRoles(roles),
+      expiresAt: Number(row.expiresAt)
+    };
+  }
+  const session = sessions.get(token);
+  if (!session || session.expiresAt < Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  return session;
+}
+
+function sessionTokenHash(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
 }
 
 function requireReadAccess(...moduleIds) {
@@ -2567,6 +2767,52 @@ function migrationVersion(file) {
   return file.match(/^V(\d+)__/i)?.[1] || null;
 }
 
+async function storeDrawingFile(file, username) {
+  if (config.uploadStorage === "database") {
+    if (!file.buffer) throw httpError(500, "No fue posible preparar el archivo para almacenamiento en MySQL");
+    const filename = safeStorageFilename(file.originalname);
+    const result = await exec(
+      `INSERT INTO pieza_dibujos (filename, original_name, mime_type, size_bytes, content, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        filename,
+        String(file.originalname || filename).slice(0, 255),
+        String(file.mimetype || "application/octet-stream").slice(0, 120),
+        Number(file.size || file.buffer.length || 0),
+        file.buffer,
+        String(username || "system").slice(0, 80)
+      ]
+    );
+    return { archivo: `api/piezas/dibujos/${result.insertId}/${filename}` };
+  }
+  return { archivo: `uploads/dibujos/${file.filename}` };
+}
+
+async function sendStoredDrawing(req, res) {
+  const row = await one(
+    `SELECT filename, original_name AS originalName, mime_type AS mimeType, size_bytes AS sizeBytes, content
+       FROM pieza_dibujos
+      WHERE id = ?`,
+    [req.params.id]
+  );
+  if (!row) throw httpError(404, "Dibujo no encontrado");
+  const filename = String(row.originalName || row.filename || "dibujo").replace(/"/g, "");
+  res.setHeader("Content-Type", row.mimeType || "application/octet-stream");
+  res.setHeader("Content-Length", Number(row.sizeBytes || row.content?.length || 0));
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.end(row.content);
+}
+
+function safeStorageFilename(filename) {
+  const extension = safeUploadExtension(filename);
+  const baseName = path.basename(filename || "dibujo", path.extname(filename || ""))
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+  return `${baseName || "dibujo"}${extension || ""}`;
+}
+
 function safeUploadExtension(filename) {
   const extension = path.extname(String(filename || "")).toLowerCase();
   return UPLOAD_EXTENSIONS.has(extension) ? extension : "";
@@ -2591,7 +2837,7 @@ function validateProductionConfig() {
   if (config.db.ssl.rejectUnauthorized === false) {
     throw new Error("DB_SSL_REJECT_UNAUTHORIZED=false no esta permitido en produccion.");
   }
-  if (!config.allowedOrigins.length) {
+  if (!IS_SERVERLESS && !config.allowedOrigins.length) {
     throw new Error("APP_ALLOWED_ORIGINS debe definirse en produccion.");
   }
 }
