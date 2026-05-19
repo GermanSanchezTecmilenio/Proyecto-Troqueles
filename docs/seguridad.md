@@ -11,7 +11,7 @@ Usar `.env.example` como plantilla y mantener `.env` fuera de Git.
 | `APP_BOOTSTRAP_ADMIN_PASSWORD` | Debe ser larga, unica y contener mayuscula, minuscula, numero y simbolo. |
 | `DB_PASSWORD` | No debe repetirse entre ambientes. |
 | `MYSQL_ROOT_PASSWORD` | Debe ser diferente a `DB_PASSWORD` y no compartirse con usuarios de aplicacion. |
-| `APP_ALLOWED_ORIGINS` | Dejar vacio en mismo dominio o limitar a dominios de confianza. |
+| `APP_ALLOWED_ORIGINS` | Dejar vacio en mismo dominio/Netlify Function o limitar a dominios de confianza cuando frontend y backend esten separados. |
 | `APP_LOGIN_RATE_LIMIT_MAX` | Limitar intentos por IP/usuario dentro de la ventana configurada. |
 | `DB_SSL` / `DB_SSL_REJECT_UNAUTHORIZED` | En produccion usar TLS y validar certificado. |
 | `DB_SSL_CA_BASE64` | En Netlify/Aiven guardar el CA PEM en base64 para validar TLS sin versionar certificados. |

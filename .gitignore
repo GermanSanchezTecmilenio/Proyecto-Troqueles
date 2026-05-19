@@ -7,6 +7,9 @@ uploads/
 
 # Local environment and IDE files
 .env
+.env.aiven
+ca.pem
+aiven-ca.pem
 .idea/
 .vscode/
 *.iml

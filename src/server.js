@@ -1103,8 +1103,8 @@ function parseDbConfig() {
       host: url.hostname || "localhost",
       port: Number(url.port || 3306),
       database: url.pathname.replace(/^\//, "") || DEFAULT_DB_NAME,
-      user: process.env.DB_USER || decodeUrlCredential(url.username) || "tornos_app",
-      password: process.env.DB_PASSWORD || decodeUrlCredential(url.password) || "",
+      user: decodeUrlCredential(url.username) || process.env.DB_USER || "tornos_app",
+      password: decodeUrlCredential(url.password) || process.env.DB_PASSWORD || "",
       charset: "utf8mb4",
       ssl: dbUrlRequiresSsl(url) ? dbSslConfig() : undefined
     };

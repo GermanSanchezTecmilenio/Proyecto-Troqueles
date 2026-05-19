@@ -8,6 +8,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "check": "node --check src/server.js",
+    "aiven:check": "node scripts/migrate-local-to-aiven.mjs --dry-run",
+    "aiven:migrate": "node scripts/migrate-local-to-aiven.mjs --apply --replace-target",
+    "netlify:validate": "node scripts/validate-netlify-aiven.mjs",
     "review:ai": "node scripts/ai-code-review.mjs"
   },
   "dependencies": {

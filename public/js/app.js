@@ -1,4 +1,4 @@
-import { api, clearToken, formData, getToken, setToken } from "./api.js?v=20260507-icons";
+import { api, clearToken, formData, getToken, setToken } from "./api.js?v=20260518-aiven-netlify";
 
 const loginView = document.querySelector("#login-view");
 const appView = document.querySelector("#app-view");

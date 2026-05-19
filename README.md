@@ -14,6 +14,7 @@ La version actual esta migrada a **Node.js + Express + MySQL**. No existe modo d
 | Documentacion API | [docs/api-rest.md](docs/api-rest.md) |
 | Modelo de datos | [docs/modelo-datos-inicial.md](docs/modelo-datos-inicial.md) |
 | Seguridad operativa | [docs/seguridad.md](docs/seguridad.md) |
+| Netlify + Aiven | [docs/aiven-netlify.md](docs/aiven-netlify.md) |
 
 ## Stack Tecnico
 
@@ -27,6 +28,8 @@ La version actual esta migrada a **Node.js + Express + MySQL**. No existe modo d
 | Frontend | HTML, CSS y JavaScript sin framework |
 | Configuracion | `.env` con `dotenv` |
 | Migraciones | SQL versionado en `db/migrations` |
+| Hosting Netlify | Frontend estatico + Netlify Functions |
+| MySQL remoto | Aiven for MySQL con SSL |
 
 ## Estructura del Proyecto
 
@@ -38,13 +41,17 @@ La version actual esta migrada a **Node.js + Express + MySQL**. No existe modo d
 |   |-- index.html
 |   |-- styles.css
 |   `-- js/
+|-- netlify/
+|   `-- functions/     Adaptador serverless para Express
 |-- db/
 |   `-- migrations/    Migraciones SQL versionadas; debe permanecer en raiz
 |-- docs/              Documentacion tecnica y funcional en Markdown
+|-- scripts/           Utilidades de build, validacion y migracion Aiven
 |-- package.json       Scripts y dependencias Node
 |-- package-lock.json  Versiones bloqueadas de dependencias
 |-- docker-compose.yml MySQL opcional por Docker
 |-- .env.example       Plantilla de configuracion
+|-- .env.aiven.example Plantilla privada para conectar Aiven desde local
 `-- .env               Configuracion local privada
 ```
 
@@ -110,6 +117,9 @@ Arranca una vez la aplicacion y despues regresa el valor a `false`.
 | `npm start` | Arranca el sistema en `SERVER_PORT`. |
 | `npm run dev` | Arranca con `node --watch`. |
 | `npm run check` | Revisa sintaxis de `src/server.js`. |
+| `npm run aiven:check` | Valida conexion y conteos local vs Aiven sin copiar datos. |
+| `npm run aiven:migrate` | Reemplaza datos de Aiven con la copia de MySQL local. |
+| `npm run netlify:validate` | Simula el backend de Netlify contra Aiven y prueba `/api/health`. |
 | `npm run review:ai` | Genera una revision IA tecnica del repo, sin integrarse al frontend. |
 | `npm audit` | Revisa vulnerabilidades npm. |
 
@@ -231,7 +241,15 @@ DB_POOL_SIZE=2
 
 `TORNOS_API_BASE_URL` ya no es obligatorio cuando el backend corre como Netlify Function en el mismo sitio. Solo usalo si decides hospedar el backend en otro servicio y quieres que Netlify sea un frontend estatico apuntando a esa URL.
 
-El primer acceso a la funcion aplica migraciones pendientes en Aiven. Esto crea tablas faltantes, pero no copia automaticamente datos desde tu MySQL local; para conservar informacion local debes exportarla e importarla en Aiven con una herramienta MySQL antes o despues del despliegue.
+El primer acceso a la funcion aplica migraciones pendientes en Aiven. Para copiar datos locales hacia Aiven usa:
+
+```powershell
+npm run aiven:check
+npm run aiven:migrate
+npm run netlify:validate
+```
+
+Estado validado: Aiven responde con las mismas 26 tablas y 397 registros que MySQL local; la validacion local tipo Netlify responde `200` en `/api/health`.
 
 ## Endpoints Principales
 
@@ -272,7 +290,7 @@ El primer acceso a la funcion aplica migraciones pendientes en Aiven. Esto crea 
 - Los tokens son opacos, se generan con `crypto.randomBytes`; en servidor local viven en memoria y en Netlify pueden persistirse en MySQL con `APP_SESSION_STORAGE=database`.
 - El tiempo de vida del token se controla con `APP_TOKEN_TTL_MINUTES`.
 - El login aplica bloqueo por intentos fallidos y rate limiting por IP/usuario.
-- En produccion (`NODE_ENV=production`) la conexion a MySQL debe usar TLS validado y `APP_ALLOWED_ORIGINS` debe estar configurado.
+- En produccion (`NODE_ENV=production`) la conexion a MySQL debe usar TLS validado. En Netlify mismo dominio, `APP_ALLOWED_ORIGINS` puede quedar vacio; en dominios separados debe configurarse.
 - Los roles se guardan en `user_roles`; por defecto el bootstrap crea `ADMIN` y `OPERADOR`.
 - `.env` nunca debe publicarse ni compartirse.
 - `APP_ALLOWED_ORIGINS` permite limitar CORS cuando el frontend vive en otro dominio.

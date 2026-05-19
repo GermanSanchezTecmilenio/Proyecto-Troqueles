@@ -9,5 +9,6 @@ El proyecto usa Node.js/Express en `src/`, frontend estatico en `public/`, migra
 | Archivo | Uso |
 |---|---|
 | `api-rest.md` | Rutas REST disponibles por modulo. |
+| `aiven-netlify.md` | Conexion Aiven, variables Netlify y validacion de despliegue. |
 | `modelo-datos-inicial.md` | Tablas principales y reglas de datos en uso. |
 | `seguridad.md` | Variables, autenticacion, sesiones y checklist de produccion. |
