@@ -1,12 +1,16 @@
 import dotenv from "dotenv";
 import http from "node:http";
 import { existsSync } from "node:fs";
+import path from "node:path";
 
 const localEnv = dotenv.config({ path: ".env" }).parsed || {};
-const aivenEnv = dotenv.config({ path: ".env.aiven" }).parsed || {};
+const aivenEnv = {
+  ...(dotenv.config({ path: "config/local/.env.aiven" }).parsed || {}),
+  ...(dotenv.config({ path: ".env.aiven" }).parsed || {})
+};
 
 if (!aivenEnv.AIVEN_DB_URL) {
-  throw new Error("Falta .env.aiven con AIVEN_DB_URL.");
+  throw new Error("Falta config/local/.env.aiven con AIVEN_DB_URL.");
 }
 
 const url = new URL(aivenEnv.AIVEN_DB_URL.replace(/^jdbc:/, ""));
@@ -17,7 +21,7 @@ process.env.DB_URL = aivenEnv.AIVEN_DB_URL;
 process.env.DB_USER = decodeURIComponent(url.username || "");
 process.env.DB_PASSWORD = decodeURIComponent(url.password || "");
 process.env.DB_SSL = "true";
-process.env.DB_SSL_CA_FILE = aivenEnv.AIVEN_DB_SSL_CA_FILE || localEnv.DB_SSL_CA_FILE || "aiven-ca.pem";
+process.env.DB_SSL_CA_FILE = resolveConfigFile(aivenEnv.AIVEN_DB_SSL_CA_FILE || localEnv.DB_SSL_CA_FILE || "aiven-ca.pem");
 process.env.DB_SSL_REJECT_UNAUTHORIZED = aivenEnv.AIVEN_DB_SSL_REJECT_UNAUTHORIZED || "true";
 process.env.APP_SESSION_STORAGE = "database";
 process.env.APP_UPLOAD_STORAGE = "database";
@@ -50,3 +54,12 @@ setTimeout(() => {
   console.error("Timeout validando Netlify/Aiven.");
   process.exit(1);
 }, 30000);
+
+function resolveConfigFile(filePath) {
+  const candidates = [
+    path.resolve(filePath),
+    path.resolve("config", "local", filePath)
+  ];
+  const match = candidates.find(candidate => existsSync(candidate));
+  return match || candidates[0];
+}

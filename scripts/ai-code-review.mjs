@@ -87,7 +87,8 @@ async function main() {
 async function selectedFileSections() {
   const baseFiles = [
     "package.json",
-    ".env.example",
+    "config/env/.env.example",
+    "config/env/.env.aiven.example",
     "docker-compose.yml",
     "netlify.toml",
     "README.md",

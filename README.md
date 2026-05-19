@@ -1,221 +1,161 @@
 # Tornos SA de CV
 
-Sistema web/API para los flujos operativos de **Tornos SA de CV**: catalogos, produccion, compras, almacen, remisiones, reportes, seguridad y auditoria.
+Sistema web/API para operacion administrativa de Tornos SA de CV: catalogos, produccion, compras, almacen, remisiones, reportes, seguridad y auditoria.
 
-La version actual esta migrada a **Node.js + Express + MySQL**. No existe modo demo ni base en memoria; todos los datos operativos viven en MySQL.
+La aplicacion usa **Node.js + Express + MySQL**. No hay modo demo ni base local en memoria: todos los datos viven en MySQL.
 
-## Accesos Rapidos
+## Estado Actual
 
-| Recurso | Liga |
+| Area | Estado |
 |---|---|
-| Aplicacion web | http://localhost:8080 |
-| Health API | http://localhost:8080/api/health |
-| Health compatible | http://localhost:8080/actuator/health |
-| Documentacion API | [docs/api-rest.md](docs/api-rest.md) |
-| Modelo de datos | [docs/modelo-datos-inicial.md](docs/modelo-datos-inicial.md) |
-| Seguridad operativa | [docs/seguridad.md](docs/seguridad.md) |
-| Netlify + Aiven | [docs/aiven-netlify.md](docs/aiven-netlify.md) |
+| Frontend | `public/`, publicado por Netlify |
+| Backend | Express en `src/server.js` |
+| Netlify | `/api/**` redirige a `netlify/functions/api.mjs` |
+| Base remota | Aiven for MySQL 8.4 con SSL |
+| Datos Aiven | Validado: 26 tablas, 397 registros, igual que MySQL local |
+| Health validado | `npm run netlify:validate` responde `200 {"status":"UP","database":"mysql"}` |
 
-## Stack Tecnico
-
-| Capa | Tecnologia |
-|---|---|
-| Backend | Node.js, Express |
-| Base de datos | MySQL 8.x |
-| Driver DB | `mysql2` |
-| Seguridad | Bearer token opaco, `bcryptjs`, roles en MySQL |
-| Uploads | `multer` |
-| Frontend | HTML, CSS y JavaScript sin framework |
-| Configuracion | `.env` con `dotenv` |
-| Migraciones | SQL versionado en `db/migrations` |
-| Hosting Netlify | Frontend estatico + Netlify Functions |
-| MySQL remoto | Aiven for MySQL con SSL |
-
-## Estructura del Proyecto
+## Estructura
 
 ```text
 .
-|-- src/
-|   `-- server.js      API REST, autenticacion, migraciones y servidor web
-|-- public/            Frontend estatico
-|   |-- index.html
-|   |-- styles.css
-|   `-- js/
-|-- netlify/
-|   `-- functions/     Adaptador serverless para Express
-|-- db/
-|   `-- migrations/    Migraciones SQL versionadas; debe permanecer en raiz
-|-- docs/              Documentacion tecnica y funcional en Markdown
-|-- scripts/           Utilidades de build, validacion y migracion Aiven
-|-- package.json       Scripts y dependencias Node
-|-- package-lock.json  Versiones bloqueadas de dependencias
-|-- docker-compose.yml MySQL opcional por Docker
-|-- .env.example       Plantilla de configuracion
-|-- .env.aiven.example Plantilla privada para conectar Aiven desde local
-`-- .env               Configuracion local privada
+|-- src/                 Backend Express y logica de negocio
+|-- public/              Frontend estatico
+|-- netlify/functions/   Adaptador serverless para Netlify
+|-- db/migrations/       Migraciones SQL versionadas
+|-- config/env/          Plantillas de variables de entorno
+|-- config/local/        Archivos privados locales ignorados por Git
+|-- scripts/             Build, validacion y migracion Aiven
+|-- docs/                Documentacion tecnica
+|-- netlify.toml         Build, functions y redirects de Netlify
+|-- package.json         Scripts npm y dependencias
+`-- .env                 Configuracion local privada
 ```
 
-## Instalacion
-
-1. Instalar dependencias:
-
-```powershell
-npm install
-```
-
-2. Copiar `.env.example` como `.env` y configurar MySQL:
-
-```properties
-SERVER_PORT=8080
-NODE_ENV=development
-
-DB_URL=jdbc:mysql://localhost:3306/tornos_sa_cv?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Mexico_City
-DB_USER=tornos_app
-DB_PASSWORD=CAMBIAR_password_largo_base_datos
-
-APP_BOOTSTRAP_ADMIN_USERNAME=admin
-APP_BOOTSTRAP_ADMIN_PASSWORD=CAMBIAR_Admin_2026!
-APP_BOOTSTRAP_ADMIN_DISPLAY_NAME=Administrador
-APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=false
-```
-
-3. Confirmar que MySQL este activo en `localhost:3306`.
-
-4. Ejecutar:
-
-```powershell
-npm start
-```
-
-5. Abrir:
-
-```text
-http://localhost:8080
-```
-
-## Credenciales Locales
-
-Las credenciales iniciales salen de `.env`:
-
-```text
-Usuario: admin
-Password: valor de APP_BOOTSTRAP_ADMIN_PASSWORD
-```
-
-Si el usuario `admin` ya existe y necesitas sincronizar el password con `.env`, cambia temporalmente:
-
-```properties
-APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true
-```
-
-Arranca una vez la aplicacion y despues regresa el valor a `false`.
+No versionar `.env`, `config/local/`, `node_modules`, `logs` ni `uploads`.
 
 ## Scripts
 
 | Comando | Uso |
 |---|---|
-| `npm start` | Arranca el sistema en `SERVER_PORT`. |
+| `npm install` | Instala dependencias. |
+| `npm start` | Arranca localmente en `SERVER_PORT`. |
 | `npm run dev` | Arranca con `node --watch`. |
-| `npm run check` | Revisa sintaxis de `src/server.js`. |
-| `npm run aiven:check` | Valida conexion y conteos local vs Aiven sin copiar datos. |
-| `npm run aiven:migrate` | Reemplaza datos de Aiven con la copia de MySQL local. |
-| `npm run netlify:validate` | Simula el backend de Netlify contra Aiven y prueba `/api/health`. |
-| `npm run review:ai` | Genera una revision IA tecnica del repo, sin integrarse al frontend. |
-| `npm audit` | Revisa vulnerabilidades npm. |
+| `npm run check` | Valida sintaxis de `src/server.js`. |
+| `npm run aiven:check` | Compara conteos local vs Aiven sin copiar datos. |
+| `npm run aiven:migrate` | Reemplaza Aiven con la copia de MySQL local. Usar con cuidado. |
+| `npm run netlify:validate` | Simula Netlify Functions contra Aiven y prueba `/api/health`. |
+| `npm audit --audit-level=moderate` | Revisa vulnerabilidades. |
 
-## Revision IA Tecnica
+## Desarrollo Local
 
-La herramienta IA vive fuera de la aplicacion web. Su objetivo es revisar codigo, seguridad de codigo, infraestructura y arquitectura del repositorio. No lee `.env`, `node_modules`, `logs` ni `uploads`, pero si envia contexto tecnico del repo al proveedor configurado por `OPENAI_API_KEY`.
+1. Instala dependencias:
 
-Configura en `.env`:
+```powershell
+npm install
+```
+
+2. Copia la plantilla:
+
+```powershell
+Copy-Item config/env/.env.example .env
+```
+
+3. Configura `.env` con tu MySQL local:
 
 ```properties
-OPENAI_API_KEY=tu_api_key
-AI_REVIEW_OUTPUT=docs/ai-review-report.md
-AI_REVIEW_MAX_CONTEXT_CHARS=120000
+SERVER_PORT=8080
+NODE_ENV=development
+DB_URL=jdbc:mysql://localhost:3306/tornos_sa_cv?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Mexico_City
+DB_USER=tornos_app
+DB_PASSWORD=CAMBIAR_password_largo_base_datos
+APP_BOOTSTRAP_ADMIN_USERNAME=admin
+APP_BOOTSTRAP_ADMIN_PASSWORD=CAMBIAR_Admin_2026!
+APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=false
 ```
 
-Ejecuta:
+4. Arranca:
 
 ```powershell
-npm run review:ai
+npm start
 ```
 
-Tambien puedes enfocar la revision:
+5. Abre:
 
-```powershell
-npm run review:ai -- --focus="seguridad y arquitectura"
+```text
+http://localhost:8080
 ```
 
-## Prueba Rapida de APIs
+Credenciales iniciales:
 
-### APIs publicas
+```text
+Usuario: valor de APP_BOOTSTRAP_ADMIN_USERNAME
+Password: valor de APP_BOOTSTRAP_ADMIN_PASSWORD
+```
 
-Estas ligas abren directo en el navegador:
+Si el usuario ya existe y necesitas sincronizar password, cambia temporalmente `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`, arranca una vez y vuelve a dejarlo en `false`.
 
-| API | Liga |
+## Aiven
+
+Servicio configurado:
+
+| Campo | Valor |
 |---|---|
-| Health principal | http://localhost:8080/api/health |
-| Health compatible | http://localhost:8080/actuator/health |
-| Frontend | http://localhost:8080 |
+| Servicio | Aiven for MySQL |
+| Host | `mysql-19a2e940-germans-3052.e.aivencloud.com` |
+| Puerto | `19533` |
+| Usuario | `avnadmin` |
+| Base | `defaultdb` |
+| SSL | `REQUIRED` |
 
-### Login y token
-
-La mayoria de rutas `/api/**` requiere token Bearer. Para probar desde PowerShell:
-
-```powershell
-$loginBody = @{
-  username = "admin"
-  password = "VALOR_DE_APP_BOOTSTRAP_ADMIN_PASSWORD"
-} | ConvertTo-Json
-
-$login = Invoke-RestMethod `
-  -Uri "http://localhost:8080/api/auth/login" `
-  -Method POST `
-  -ContentType "application/json" `
-  -Body $loginBody
-
-$headers = @{ Authorization = "Bearer $($login.token)" }
-```
-
-### APIs protegidas para probar
-
-Ejecuta estas llamadas despues de crear `$headers`:
+Configura el archivo privado local:
 
 ```powershell
-Invoke-RestMethod "http://localhost:8080/api/auth/me" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/clientes" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/proveedores" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/operadores" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/estatus-produccion" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/piezas" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/monitor-produccion" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/requisiciones" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/requisiciones/material-opciones" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/ordenes-compra" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/ordenes-trabajo" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/estimaciones" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/almacen/articulos" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/almacen/kardex" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/remisiones" -Headers $headers
-Invoke-RestMethod "http://localhost:8080/api/facturas" -Headers $headers
+New-Item -ItemType Directory -Force config/local
+Copy-Item config/env/.env.aiven.example config/local/.env.aiven
+notepad config/local/.env.aiven
 ```
 
-## Publicacion en Netlify
+Formato esperado:
 
-Netlify publica el frontend estatico y redirige `/api/**` a una Netlify Function que ejecuta el backend Express. La base de datos debe ser remota; para Aiven for MySQL usa la URI del servicio con SSL.
+```properties
+AIVEN_DB_URL=mysql://avnadmin:TU_PASSWORD@mysql-19a2e940-germans-3052.e.aivencloud.com:19533/defaultdb?ssl-mode=REQUIRED
+AIVEN_DB_SSL_CA_FILE=aiven-ca.pem
+AIVEN_DB_SSL_REJECT_UNAUTHORIZED=true
+```
 
-Para Netlify se agrego:
+Guarda el certificado CA local en:
 
-| Archivo | Uso |
-|---|---|
-| `netlify.toml` | Publica `public/`, registra `netlify/functions` y redirige `/api/**` a la funcion. |
-| `netlify/functions/api.mjs` | Adaptador serverless para Express. |
-| `scripts/write-netlify-config.mjs` | Genera `public/config.js` con la URL del backend. |
-| `public/config.js` | Archivo generado durante build; define `window.TORNOS_API_BASE_URL`. |
-| `db/migrations/V18__netlify_aiven_runtime_storage.sql` | Agrega sesiones persistentes y almacenamiento de dibujos en MySQL para Netlify. |
+```text
+config/local/aiven-ca.pem
+```
 
-Configuracion recomendada en Netlify:
+Valida conexion y datos:
+
+```powershell
+npm run aiven:check
+```
+
+Resultado esperado:
+
+```text
+Local: tablas=26; tablas_con_datos=21; registros=397
+Aiven: tablas=26; tablas_con_datos=21; registros=397
+```
+
+Para copiar local hacia Aiven:
+
+```powershell
+npm run aiven:migrate
+```
+
+Este comando limpia las tablas de Aiven y las reemplaza por la copia local. Ejecutarlo solo cuando nadie este capturando datos.
+
+## Netlify
+
+Netlify publica `public/` y ejecuta el backend mediante `netlify/functions/api.mjs`. No se necesita backend externo ni `TORNOS_API_BASE_URL`.
+
+Configuracion de build:
 
 | Campo | Valor |
 |---|---|
@@ -223,11 +163,11 @@ Configuracion recomendada en Netlify:
 | Publish directory | `public` |
 | Functions directory | `netlify/functions` |
 
-Variables minimas para Netlify + Aiven:
+Variables requeridas en Netlify:
 
 ```properties
 NODE_ENV=production
-DB_URL=mysql://avnadmin:TU_PASSWORD@TU_HOST_AIVEN:TU_PUERTO/defaultdb?ssl-mode=REQUIRED
+DB_URL=mysql://avnadmin:TU_PASSWORD@mysql-19a2e940-germans-3052.e.aivencloud.com:19533/defaultdb?ssl-mode=REQUIRED
 DB_SSL=true
 DB_SSL_CA_BASE64=BASE64_DEL_CA_PEM_DE_AIVEN
 APP_BOOTSTRAP_ADMIN_USERNAME=admin
@@ -237,126 +177,63 @@ APP_UPLOAD_STORAGE=database
 DB_POOL_SIZE=2
 ```
 
-`APP_ALLOWED_ORIGINS` puede quedar vacio en Netlify si usas el mismo dominio, porque la funcion toma `URL` y `DEPLOY_PRIME_URL` del ambiente. Si usas dominio personalizado o backend externo, define el origen exacto, por ejemplo `https://tusitio.com`.
+No definas `TORNOS_API_BASE_URL` para este despliegue. Si quedo de intentos anteriores, el build actual no la incrusta salvo que tambien definas `NETLIFY_USE_EXTERNAL_API=true`.
 
-`TORNOS_API_BASE_URL` ya no es obligatorio cuando el backend corre como Netlify Function en el mismo sitio. Solo usalo si decides hospedar el backend en otro servicio y quieres que Netlify sea un frontend estatico apuntando a esa URL.
-
-El primer acceso a la funcion aplica migraciones pendientes en Aiven. Para copiar datos locales hacia Aiven usa:
+Para generar `DB_SSL_CA_BASE64`:
 
 ```powershell
-npm run aiven:check
-npm run aiven:migrate
-npm run netlify:validate
+[Convert]::ToBase64String([IO.File]::ReadAllBytes(".\config\local\aiven-ca.pem"))
 ```
 
-Estado validado: Aiven responde con las mismas 26 tablas y 397 registros que MySQL local; la validacion local tipo Netlify responde `200` en `/api/health`.
-
-## Endpoints Principales
-
-| Modulo | Metodo | Ruta | Uso |
-|---|---|---|---|
-| Salud | `GET` | `/api/health` | Estado de Node/MySQL. |
-| Seguridad | `POST` | `/api/auth/login` | Iniciar sesion. |
-| Seguridad | `GET` | `/api/auth/me` | Usuario autenticado. |
-| Seguridad | `POST` | `/api/auth/logout` | Cerrar sesion. |
-| Catalogos | `GET/POST` | `/api/clientes` | Listar/crear clientes. |
-| Catalogos | `GET/POST` | `/api/proveedores` | Listar/crear proveedores. |
-| Catalogos | `GET/POST` | `/api/operadores` | Listar/crear operadores. |
-| Produccion | `GET/POST` | `/api/piezas` | Listar/crear piezas. |
-| Produccion | `POST` | `/api/piezas/dibujos` | Subir dibujo/archivo. |
-| Produccion | `GET` | `/api/piezas/{id}/pdf` | Ficha PDF de pieza con notas y estimaciones. |
-| Produccion | `PUT` | `/api/piezas/{id}/estatus` | Cambiar estatus y agregar nota. |
-| Produccion | `GET/POST` | `/api/piezas/{id}/estimaciones` | Consultar/capturar estimaciones del monitor. |
-| Produccion | `GET` | `/api/estimaciones` | Consolidado de estimaciones para reportes. |
-| Produccion | `GET/POST` | `/api/ordenes-trabajo` | Listar/crear OT. |
-| Produccion | `GET` | `/api/ordenes-trabajo/{id}/pdf` | Documento PDF de OT. |
-| Produccion | `GET` | `/api/monitor-produccion` | Monitor operativo. |
-| Produccion | `GET/POST` | `/api/tiempos` | Consultar/capturar tiempos. |
-| Compras | `GET/POST` | `/api/requisiciones` | Listar/crear requisiciones. |
-| Compras | `GET/POST` | `/api/ordenes-compra` | Listar/crear ordenes de compra. |
-| Almacen | `GET/POST` | `/api/almacen/articulos` | Articulos de almacen. |
-| Almacen | `POST` | `/api/almacen/entradas` | Entrada de inventario. |
-| Almacen | `POST` | `/api/almacen/salidas` | Salida de inventario. |
-| Remisiones | `GET/POST` | `/api/remisiones` | Listar/crear remisiones. |
-| Remisiones | `GET` | `/api/remisiones/{id}/pdf` | Documento PDF de remision. |
-| Facturacion | `GET/POST` | `/api/facturas` | Control administrativo de facturas. |
-| Facturacion | `GET` | `/api/facturas/{id}/pdf` | Documento PDF de factura administrativa. |
-
-## Seguridad Integrada
-
-- Las rutas bajo `/api/**` requieren `Authorization: Bearer <token>`, excepto `POST /api/auth/login`.
-- El backend valida permisos por modulo y accion antes de ejecutar rutas operativas.
-- Los passwords se almacenan con BCrypt usando `bcryptjs`.
-- Los tokens son opacos, se generan con `crypto.randomBytes`; en servidor local viven en memoria y en Netlify pueden persistirse en MySQL con `APP_SESSION_STORAGE=database`.
-- El tiempo de vida del token se controla con `APP_TOKEN_TTL_MINUTES`.
-- El login aplica bloqueo por intentos fallidos y rate limiting por IP/usuario.
-- En produccion (`NODE_ENV=production`) la conexion a MySQL debe usar TLS validado. En Netlify mismo dominio, `APP_ALLOWED_ORIGINS` puede quedar vacio; en dominios separados debe configurarse.
-- Los roles se guardan en `user_roles`; por defecto el bootstrap crea `ADMIN` y `OPERADOR`.
-- `.env` nunca debe publicarse ni compartirse.
-- `APP_ALLOWED_ORIGINS` permite limitar CORS cuando el frontend vive en otro dominio.
-- En produccion se recomienda usar HTTPS mediante proxy o balanceador.
-- Para invalidar todas las sesiones activas en local, reinicia el proceso Node; en Netlify elimina registros de `user_sessions` o rota el password de usuarios.
-
-## Base de Datos y Migraciones
-
-Al iniciar, `src/server.js`:
-
-1. Lee `.env`.
-2. Conecta a MySQL.
-3. Crea la base `tornos_sa_cv` si el usuario tiene permisos.
-4. Crea `schema_migrations` si no existe.
-5. Ejecuta migraciones pendientes desde `db/migrations`.
-6. Crea o actualiza el usuario administrador inicial.
-
-La carpeta `db/` si debe estar en el proyecto porque contiene migraciones SQL. No contiene datos productivos ni archivos fisicos de MySQL; la base real vive en el servidor MySQL configurado en `.env`.
-
-No modificar migraciones ya aplicadas. Para cambios nuevos, agregar un archivo con el siguiente numero:
+Despues del deploy, prueba:
 
 ```text
-db/migrations/V12__descripcion_del_cambio.sql
+https://TU-SITIO.netlify.app/api/health
 ```
 
-## Solucion de Problemas
+Debe responder:
 
-### Puerto 8080 ocupado
+```json
+{"status":"UP","database":"mysql"}
+```
+
+## Validacion Antes De Deploy
+
+Ejecuta:
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8080
-Stop-Process -Id <PID>
+npm run check
+npm run aiven:check
+npm run netlify:validate
+npm audit --audit-level=moderate
 ```
 
-### Login incorrecto aunque el password sea correcto
+Tambien se valido que la Function pueda empaquetarse con esbuild en formato CJS, que era el error original de Netlify.
 
-Activa una vez:
+## Seguridad
 
-```properties
-APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true
-```
+- `.env` y `config/local/` son privados.
+- Usar SSL validado hacia Aiven.
+- En Netlify, las sesiones y archivos se guardan en MySQL con `APP_SESSION_STORAGE=database` y `APP_UPLOAD_STORAGE=database`.
+- Los tokens son opacos y los passwords se guardan con BCrypt.
+- La contrasena de Aiven fue expuesta durante configuracion inicial; rotarla en Aiven antes de dejar el sitio productivo.
 
-Arranca `npm start`, confirma login y vuelve a dejarlo en `false`.
+## Problemas Comunes
 
-### MySQL no conecta
+| Problema | Solucion |
+|---|---|
+| Build falla por `Top-level await` | Confirmar que `src/server.js` tenga arranque con `start().catch(...)`, no `await start()`. |
+| Netlify detecta `TORNOS_API_BASE_URL` como secreto | Eliminar esa variable de Netlify o mantener `SECRETS_SCAN_OMIT_KEYS` en `netlify.toml`. |
+| Login falla en Netlify | Revisar `DB_URL`, `DB_SSL`, `DB_SSL_CA_BASE64` y `APP_BOOTSTRAP_ADMIN_PASSWORD`. |
+| API 404 en Netlify | Revisar redirects de `netlify.toml` y que exista `netlify/functions/api.mjs`. |
+| Aiven sin datos | Ejecutar `npm run aiven:check`; si Aiven esta vacio, correr `npm run aiven:migrate`. |
+| Password admin no coincide | Usar temporalmente `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`. |
 
-Verifica servicio y credenciales:
+## Documentacion
 
-```powershell
-Get-Service | Where-Object { $_.Name -match "mysql" }
-```
-
-Tambien confirma que `.env` tenga `DB_USER`, `DB_PASSWORD` y `DB_URL` correctos.
-
-### En Netlify no inicia sesion
-
-Revisa el log de Functions en Netlify. Las causas comunes son:
-
-- `DB_URL`, `DB_SSL` o `DB_SSL_CA_BASE64` no apuntan a Aiven correctamente.
-- `APP_BOOTSTRAP_ADMIN_PASSWORD` no esta definido.
-- Aiven todavia no tiene los datos importados desde MySQL local.
-- El primer arranque fallo aplicando migraciones por permisos o por una tabla ya modificada manualmente.
-
-## Documentacion Complementaria
-
-- [APIs REST](docs/api-rest.md)
-- [Modelo de datos](docs/modelo-datos-inicial.md)
-- [Seguridad operativa](docs/seguridad.md)
-- [Netlify + Aiven for MySQL](docs/aiven-netlify.md)
+| Archivo | Contenido |
+|---|---|
+| [docs/api-rest.md](docs/api-rest.md) | Endpoints REST. |
+| [docs/modelo-datos-inicial.md](docs/modelo-datos-inicial.md) | Modelo de datos. |
+| [docs/seguridad.md](docs/seguridad.md) | Seguridad operativa. |
+| [docs/aiven-netlify.md](docs/aiven-netlify.md) | Conexion Aiven y despliegue Netlify. |

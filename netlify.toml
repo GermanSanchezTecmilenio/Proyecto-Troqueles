@@ -2,6 +2,9 @@
   command = "node scripts/write-netlify-config.mjs"
   publish = "public"
 
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "TORNOS_API_BASE_URL"
+
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"

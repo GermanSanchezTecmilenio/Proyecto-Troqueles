@@ -10,7 +10,7 @@ import multer from "multer";
 import mysql from "mysql2/promise";
 import { ACCESS_ACTION_KEYS, ACCESS_CATALOG } from "./access-catalog.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = moduleDirname();
 const projectRoot = path.resolve(__dirname, "..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 
@@ -1045,11 +1045,14 @@ app.use((error, req, res, next) => {
   res.status(status).json({ message });
 });
 
-if (isMainModule()) {
-  await start();
-}
-
 export { app, initializeApplication, start };
+
+if (isMainModule()) {
+  start().catch(error => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 
 async function start() {
   await initializeApplication();
@@ -1226,8 +1229,23 @@ function envFlag(value) {
   return ["1", "true", "yes", "required", "require", "verify_ca", "verify-ca", "verify_identity", "verify-identity"].includes(String(value || "").toLowerCase());
 }
 
+function moduleDirname() {
+  try {
+    if (import.meta.url) {
+      return path.dirname(fileURLToPath(import.meta.url));
+    }
+  } catch {
+    // Bundlers that emit CommonJS replace import.meta with an empty object.
+  }
+  return path.join(process.cwd(), "src");
+}
+
 function isMainModule() {
-  return Boolean(process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href);
+  try {
+    return Boolean(process.argv[1] && import.meta.url && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href);
+  } catch {
+    return false;
+  }
 }
 
 async function ensureDatabase() {

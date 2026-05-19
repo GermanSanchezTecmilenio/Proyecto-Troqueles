@@ -4,7 +4,7 @@ Guia para operar el sistema sin exponer credenciales, sesiones o datos sensibles
 
 ## Configuracion base
 
-Usar `.env.example` como plantilla y mantener `.env` fuera de Git.
+Usar `config/env/.env.example` como plantilla y mantener `.env` fuera de Git.
 
 | Variable | Regla |
 |---|---|

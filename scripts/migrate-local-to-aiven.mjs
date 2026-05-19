@@ -32,6 +32,7 @@ async function main() {
     ...pickEnv(["LOCAL_DB_URL", "LOCAL_DB_HOST", "LOCAL_DB_PORT", "LOCAL_DB_NAME", "LOCAL_DB_USER", "LOCAL_DB_PASSWORD"])
   };
   const aivenEnv = {
+    ...readEnvFile("config/local/.env.aiven"),
     ...readEnvFile(".env.aiven"),
     ...process.env
   };
@@ -53,7 +54,7 @@ async function main() {
   });
 
   if (!aivenConfig.host.includes("aivencloud.com")) {
-    console.warn("Aviso: el host destino no parece ser de Aiven. Revisa .env.aiven antes de aplicar.");
+    console.warn("Aviso: el host destino no parece ser de Aiven. Revisa config/local/.env.aiven antes de aplicar.");
   }
 
   let local;
@@ -109,7 +110,7 @@ function printUsage() {
   console.log("  npm run aiven:check");
   console.log("  npm run aiven:migrate");
   console.log("");
-  console.log("Configura primero .env.aiven con AIVEN_DB_URL y el CA de Aiven.");
+  console.log("Configura primero config/local/.env.aiven con AIVEN_DB_URL y el CA de Aiven.");
 }
 
 function readEnvFile(relativePath) {
@@ -139,7 +140,7 @@ function parseDbConfig(env, options) {
 
   const host = env[`${options.prefix}DB_HOST`] || env.DB_HOST;
   if (!host) {
-    throw new Error(`Falta configurar ${options.label}. Copia .env.aiven.example como .env.aiven y llena AIVEN_DB_URL.`);
+    throw new Error(`Falta configurar ${options.label}. Copia config/env/.env.aiven.example como config/local/.env.aiven y llena AIVEN_DB_URL.`);
   }
 
   return {
@@ -193,8 +194,17 @@ function sslCa(env, prefix) {
   const inline = env[`${prefix}DB_SSL_CA`] || env.DB_SSL_CA;
   if (inline) return inline.replace(/\\n/g, "\n");
   const file = env[`${prefix}DB_SSL_CA_FILE`] || env.DB_SSL_CA_FILE;
-  if (file) return readFileSync(path.resolve(projectRoot, file), "utf8");
+  if (file) return readFileSync(resolveConfigFile(file), "utf8");
   return "";
+}
+
+function resolveConfigFile(filePath) {
+  const candidates = [
+    path.resolve(projectRoot, filePath),
+    path.resolve(projectRoot, "config", "local", filePath)
+  ];
+  const match = candidates.find(candidate => existsSync(candidate));
+  return match || candidates[0];
 }
 
 function envFlag(value) {

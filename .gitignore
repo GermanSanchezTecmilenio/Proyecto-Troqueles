@@ -1,20 +1,36 @@
-# Build and runtime artifacts
-dist/
+# Dependencies
 node_modules/
-*.log
+
+# Build output and generated artifacts
+dist/
+build/
+.netlify/
+coverage/
+*.tsbuildinfo
+
+# Runtime data
 logs/
+*.log
 uploads/
 
-# Local environment and IDE files
+# Private environment and credentials
 .env
-.env.aiven
-ca.pem
-aiven-ca.pem
+.env.*
+!config/env/.env.example
+!config/env/.env.aiven.example
+config/local/
+*.pem
+*.key
+*.crt
+
+# Editor and OS local files
 .idea/
 .vscode/
 *.iml
+.DS_Store
+Thumbs.db
 
-# Generated documents and helper caches
+# Generated office/docs artifacts
 docs/**/*.docx
 docs/**/*.pptx
 docs/tools/__pycache__/

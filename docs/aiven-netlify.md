@@ -14,7 +14,7 @@ Guia corta para publicar el sistema en Netlify usando Aiven como MySQL remoto. N
 | Base | `defaultdb` |
 | SSL | `REQUIRED` |
 
-El password vive solo en `.env.aiven` local y en variables de Netlify. Como ya fue expuesto durante la configuracion inicial, conviene rotarlo en Aiven antes de dejar el sitio productivo.
+El password vive solo en `config/local/.env.aiven` y en variables de Netlify. Como ya fue expuesto durante la configuracion inicial, conviene rotarlo en Aiven antes de dejar el sitio productivo.
 
 ## 1. Crear MySQL en Aiven
 
@@ -27,7 +27,7 @@ El password vive solo en `.env.aiven` local y en variables de Netlify. Como ya f
 Netlify permite variables de entorno, por eso es mas practico guardar el CA PEM en base64:
 
 ```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes(".\aiven-ca.pem"))
+[Convert]::ToBase64String([IO.File]::ReadAllBytes(".\config\local\aiven-ca.pem"))
 ```
 
 Copia el resultado en `DB_SSL_CA_BASE64`.
@@ -50,6 +50,8 @@ DB_POOL_SIZE=2
 
 No configures `TORNOS_API_BASE_URL` si el backend correra en Netlify Functions dentro del mismo sitio.
 
+Si `TORNOS_API_BASE_URL` quedo configurada de un intento anterior, puedes eliminarla. El build actual no la publica en `public/config.js` salvo que tambien configures `NETLIFY_USE_EXTERNAL_API=true`.
+
 ## 4. Migrar datos locales sin perder informacion
 
 El codigo aplica migraciones, pero no mueve datos desde tu MySQL local. Para automatizar la copia usa el script incluido.
@@ -57,15 +59,18 @@ El codigo aplica migraciones, pero no mueve datos desde tu MySQL local. Para aut
 Primero copia la plantilla privada:
 
 ```powershell
-Copy-Item .env.aiven.example .env.aiven
+New-Item -ItemType Directory -Force config/local
+Copy-Item config/env/.env.aiven.example config/local/.env.aiven
 ```
 
-Edita `.env.aiven` con la URI y el CA del servicio Aiven:
+Edita `config/local/.env.aiven` con la URI y el CA del servicio Aiven:
 
 ```properties
 AIVEN_DB_URL=mysql://avnadmin:TU_PASSWORD@mysql-19a2e940-germans-3052.e.aivencloud.com:19533/defaultdb?ssl-mode=REQUIRED
 AIVEN_DB_SSL_CA_FILE=aiven-ca.pem
 ```
+
+Guarda el CA PEM en `config/local/aiven-ca.pem`.
 
 Revisa la conexion y conteos sin copiar datos:
 
