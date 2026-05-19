@@ -95,6 +95,8 @@ Password: valor de APP_BOOTSTRAP_ADMIN_PASSWORD
 
 Si el usuario ya existe y necesitas sincronizar password, cambia temporalmente `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`, arranca una vez y vuelve a dejarlo en `false`.
 
+`APP_BOOTSTRAP_ADMIN_PASSWORD` solo es obligatorio cuando la base esta vacia y el sistema debe crear el administrador inicial, o cuando activas `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`.
+
 ## Aiven
 
 Servicio configurado:
@@ -171,11 +173,12 @@ DB_URL=mysql://avnadmin:TU_PASSWORD@mysql-19a2e940-germans-3052.e.aivencloud.com
 DB_SSL=true
 DB_SSL_CA_BASE64=BASE64_DEL_CA_PEM_DE_AIVEN
 APP_BOOTSTRAP_ADMIN_USERNAME=admin
-APP_BOOTSTRAP_ADMIN_PASSWORD=CAMBIAR_Admin_2026!
 APP_SESSION_STORAGE=database
 APP_UPLOAD_STORAGE=database
 DB_POOL_SIZE=2
 ```
+
+Si Aiven ya tiene el usuario `admin` importado, `APP_BOOTSTRAP_ADMIN_PASSWORD` no es necesario en Netlify. Agregalo solo para crear el admin inicial en una base vacia o para resetearlo junto con `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`.
 
 No definas `TORNOS_API_BASE_URL` para este despliegue. Si quedo de intentos anteriores, el build actual no la incrusta salvo que tambien definas `NETLIFY_USE_EXTERNAL_API=true`.
 
@@ -224,7 +227,7 @@ Tambien se valido que la Function pueda empaquetarse con esbuild en formato CJS,
 |---|---|
 | Build falla por `Top-level await` | Confirmar que `src/server.js` tenga arranque con `start().catch(...)`, no `await start()`. |
 | Netlify detecta `TORNOS_API_BASE_URL` como secreto | Eliminar esa variable de Netlify o mantener `SECRETS_SCAN_OMIT_KEYS` en `netlify.toml`. |
-| Login falla en Netlify | Revisar `DB_URL`, `DB_SSL`, `DB_SSL_CA_BASE64` y `APP_BOOTSTRAP_ADMIN_PASSWORD`. |
+| Login falla en Netlify | Revisar `DB_URL`, `DB_SSL`, `DB_SSL_CA_BASE64`, usuario existente y password usado para iniciar sesion. |
 | API 404 en Netlify | Revisar redirects de `netlify.toml` y que exista `netlify/functions/api.mjs`. |
 | Aiven sin datos | Ejecutar `npm run aiven:check`; si Aiven esta vacio, correr `npm run aiven:migrate`. |
 | Password admin no coincide | Usar temporalmente `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`. |

@@ -1072,9 +1072,6 @@ async function initializeApplication() {
 }
 
 async function initializeRuntime() {
-  if (!config.adminPassword) {
-    throw new Error("APP_BOOTSTRAP_ADMIN_PASSWORD es requerido. Define .env antes de iniciar.");
-  }
   validateProductionConfig();
   await ensureDatabase();
   const migrationPool = createDbPool({ multipleStatements: true });
@@ -1312,6 +1309,9 @@ async function tableExists(name) {
 async function bootstrapAdmin() {
   const existing = await one("SELECT id, password_hash AS passwordHash FROM users WHERE LOWER(username) = LOWER(?)", [config.adminUsername]);
   if (!existing) {
+    if (!config.adminPassword) {
+      throw new Error("APP_BOOTSTRAP_ADMIN_PASSWORD es requerido para crear el usuario administrador inicial.");
+    }
     const hash = await bcrypt.hash(config.adminPassword, config.bcryptStrength);
     const result = await exec(
       "INSERT INTO users (username, password_hash, display_name, active, locked, failed_attempts, password_changed_at) VALUES (?, ?, ?, TRUE, FALSE, 0, CURRENT_TIMESTAMP(6))",
@@ -1321,6 +1321,9 @@ async function bootstrapAdmin() {
     return;
   }
   if (config.adminResetPassword) {
+    if (!config.adminPassword) {
+      throw new Error("APP_BOOTSTRAP_ADMIN_PASSWORD es requerido para resetear el password administrador.");
+    }
     const hash = await bcrypt.hash(config.adminPassword, config.bcryptStrength);
     await exec(
       "UPDATE users SET password_hash = ?, display_name = ?, active = TRUE, locked = FALSE, failed_attempts = 0, password_changed_at = CURRENT_TIMESTAMP(6) WHERE id = ?",

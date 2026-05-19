@@ -8,7 +8,7 @@ Usar `config/env/.env.example` como plantilla y mantener `.env` fuera de Git.
 
 | Variable | Regla |
 |---|---|
-| `APP_BOOTSTRAP_ADMIN_PASSWORD` | Debe ser larga, unica y contener mayuscula, minuscula, numero y simbolo. |
+| `APP_BOOTSTRAP_ADMIN_PASSWORD` | Usarla solo para crear/resetear el admin inicial. Debe ser larga, unica y contener mayuscula, minuscula, numero y simbolo. |
 | `DB_PASSWORD` | No debe repetirse entre ambientes. |
 | `MYSQL_ROOT_PASSWORD` | Debe ser diferente a `DB_PASSWORD` y no compartirse con usuarios de aplicacion. |
 | `APP_ALLOWED_ORIGINS` | Dejar vacio en mismo dominio/Netlify Function o limitar a dominios de confianza cuando frontend y backend esten separados. |
@@ -56,3 +56,4 @@ npm.cmd run review:ai
 - En Netlify, usar `APP_SESSION_STORAGE=database` y `APP_UPLOAD_STORAGE=database`.
 - Limitar CORS con `APP_ALLOWED_ORIGINS` si el frontend vive en otro dominio.
 - Revisar usuarios administradores despues del primer arranque.
+- En Aiven con datos importados, no es necesario dejar `APP_BOOTSTRAP_ADMIN_PASSWORD` en Netlify salvo que se vaya a resetear el admin.

@@ -42,11 +42,12 @@ DB_URL=mysql://avnadmin:TU_PASSWORD@TU_HOST_AIVEN:TU_PUERTO/defaultdb?ssl-mode=R
 DB_SSL=true
 DB_SSL_CA_BASE64=BASE64_DEL_CA_PEM_DE_AIVEN
 APP_BOOTSTRAP_ADMIN_USERNAME=admin
-APP_BOOTSTRAP_ADMIN_PASSWORD=CAMBIAR_Admin_2026!
 APP_SESSION_STORAGE=database
 APP_UPLOAD_STORAGE=database
 DB_POOL_SIZE=2
 ```
+
+`APP_BOOTSTRAP_ADMIN_PASSWORD` es opcional si Aiven ya tiene importado el usuario `admin`. Define esa variable solo para una base vacia, o para resetear el password junto con `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`.
 
 No configures `TORNOS_API_BASE_URL` si el backend correra en Netlify Functions dentro del mismo sitio.
 
