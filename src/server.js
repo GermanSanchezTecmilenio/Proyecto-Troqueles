@@ -690,7 +690,7 @@ app.post("/api/ordenes-trabajo", requireAccess("ordenes", "canCreate"), asyncHan
 app.get("/api/ordenes-trabajo/:id/pdf", requireAccess("ordenes", "canExport"), asyncHandler(async (req, res) => {
   const orden = await getOrdenTrabajo(req.params.id);
   const piezas = (await listPiezas()).filter(pieza => Number(pieza.ordenTrabajoId) === Number(orden.id));
-  sendPdf(res, `orden-trabajo-${orden.id}.pdf`, ordenTrabajoLines(orden, piezas));
+  sendPdfBuffer(res, `orden-trabajo-${orden.id}.pdf`, ordenTrabajoStyledPdf(orden, piezas));
 }));
 
 app.get("/api/monitor-produccion", requireReadAccess("monitor"), asyncHandler(async (req, res) => {
@@ -891,7 +891,7 @@ app.delete("/api/ordenes-compra/:id", requireAccess("ordenesCompra", "canDelete"
 app.get("/api/ordenes-compra/:id/pdf", requireAccess("ordenesCompra", "canExport"), asyncHandler(async (req, res) => {
   const orden = (await listOrdenesCompra()).find(item => Number(item.id) === Number(req.params.id));
   if (!orden) throw httpError(404, "Orden de compra no encontrada");
-  sendPdf(res, `${orden.folio}.pdf`, ordenCompraLines(orden), { fontName: "Courier", fontSize: 8, lineHeight: 12, wrapWidth: 100, pageSize: 58 });
+  sendPdfBuffer(res, `${orden.folio}.pdf`, ordenCompraStyledPdf(orden));
 }));
 
 app.get("/api/ordenes-compra/:id/word", requireAccess("ordenesCompra", "canExport"), asyncHandler(async (req, res) => {
@@ -985,7 +985,7 @@ app.get("/api/remisiones/:id/pdf", requireAccess("remisiones", "canExport"), asy
     getPieza(remision.piezaId),
     listPiezaNotas(remision.piezaId)
   ]);
-  sendPdf(res, `${remision.folio}.pdf`, remisionLines(remision, pieza, notas), { fontName: "Courier", fontSize: 8, lineHeight: 12, wrapWidth: 105, pageSize: 58 });
+  sendPdfBuffer(res, `${remision.folio}.pdf`, remisionStyledPdf(remision, pieza, notas));
 }));
 
 app.get("/api/facturas", requireReadAccess("reportes"), asyncHandler(async (req, res) => {
@@ -2248,6 +2248,313 @@ function ordenCompraLines(orden) {
   return lines;
 }
 
+const PURCHASE_ORDER_PAGE = { width: 792, height: 612 };
+const PURCHASE_ORDER_TABLE = {
+  x: 36,
+  top: 360,
+  columns: [
+    { label: "CANT.", key: "cantidad", width: 52, align: "center", chars: 8 },
+    { label: "REQ.", key: "requisicion", width: 72, chars: 10 },
+    { label: "MEDIDA", key: "medida", width: 60, chars: 9 },
+    { label: "DESCRIPCION", key: "descripcion", width: 255, chars: 48, lines: 4 },
+    { label: "MATERIAL", key: "material", width: 78, chars: 14, lines: 2 },
+    { label: "ID PIEZA", key: "pieza", width: 58, align: "center", chars: 8 },
+    { label: "PRECIO", key: "precio", width: 70, align: "right", chars: 11 },
+    { label: "SUBTOTAL", key: "subtotal", width: 75, align: "right", chars: 12 }
+  ]
+};
+
+function ordenCompraStyledPdf(orden) {
+  const streams = [];
+  const detalles = orden.detalles.length ? orden.detalles : [{ descripcion: "Sin partidas registradas" }];
+  let index = 0;
+
+  while (index < detalles.length) {
+    const parts = [];
+    drawPurchaseOrderHeader(parts, orden, streams.length + 1);
+    drawPurchaseOrderTableHeader(parts, PURCHASE_ORDER_TABLE.top);
+    let yTop = PURCHASE_ORDER_TABLE.top - 24;
+    let rowsOnPage = 0;
+
+    while (index < detalles.length) {
+      const row = purchaseOrderPdfRow(detalles[index]);
+      const rowHeight = purchaseOrderPdfRowHeight(row);
+      const lastRow = index === detalles.length - 1;
+      const bottomLimit = lastRow ? 146 : 54;
+      if (rowsOnPage > 0 && yTop - rowHeight < bottomLimit) break;
+      drawPurchaseOrderRow(parts, row, yTop, rowHeight);
+      yTop -= rowHeight;
+      rowsOnPage += 1;
+      index += 1;
+    }
+
+    if (index >= detalles.length) {
+      drawPurchaseOrderFooter(parts, orden);
+    } else {
+      pdfText(parts, "Continua en la siguiente pagina", PURCHASE_ORDER_PAGE.width - 54, 34, { size: 8, align: "right" });
+    }
+    streams.push(parts.join("\n"));
+  }
+
+  return drawnPdf(streams, PURCHASE_ORDER_PAGE);
+}
+
+function drawPurchaseOrderHeader(parts, orden, pageNumber) {
+  pdfFillRect(parts, 52, 484, 86, 64, ".14 .19 .22");
+  pdfText(parts, "Tornos", 95, 528, { font: "F2", size: 11, color: "1 1 1", align: "center" });
+  pdfText(parts, "SA de CV", 95, 498, { font: "F2", size: 9, color: "1 1 1", align: "center" });
+
+  pdfText(parts, "TORNOS SA DE CV", 396, 536, { font: "F2", size: 13, align: "center" });
+  pdfText(parts, "ORDEN DE COMPRA", 396, 516, { size: 13, align: "center" });
+  if (orden.cancelado) {
+    pdfText(parts, "CANCELADA", 396, 494, { font: "F2", size: 18, color: ".72 .14 .10", align: "center" });
+  }
+
+  pdfRect(parts, 650, 478, 110, 70, 1);
+  [530.5, 513, 495.5].forEach(y => pdfLine(parts, 650, y, 760, y, .7));
+  pdfText(parts, "FOLIO", 705, 536, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, orden.folio, 705, 519, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, "FECHA", 705, 501.5, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, formatPurchaseOrderDate(orden.fecha), 705, 484, { font: "F2", size: 7, align: "center" });
+
+  drawUnderlinedField(parts, "PROVEEDOR:", orden.proveedorNombre, 52, 452, 335, 75);
+  drawUnderlinedField(parts, "RFC:", orden.proveedorRfc || "-", 420, 452, 150, 28);
+  drawUnderlinedField(parts, "MONEDA:", orden.moneda || "Moneda Nacional", 590, 452, 150, 55);
+  drawUnderlinedField(parts, "DIRECCION:", [orden.proveedorDireccion, orden.proveedorCiudad].filter(Boolean).join(", ") || "-", 52, 427, 425, 78);
+  drawUnderlinedField(parts, "CONTACTO:", orden.proveedorContacto || "-", 500, 427, 240, 70);
+  drawUnderlinedField(parts, "TELEFONO:", orden.proveedorTelefono || "-", 52, 402, 220, 70);
+  drawUnderlinedField(parts, "ELABORO:", orden.createdBy || "-", 312, 402, 205, 58);
+  pdfText(parts, `PAG. ${pageNumber}`, 740, 402, { size: 8, align: "right" });
+}
+
+function drawPurchaseOrderTableHeader(parts, yTop) {
+  const table = PURCHASE_ORDER_TABLE;
+  const totalWidth = table.columns.reduce((sum, column) => sum + column.width, 0);
+  pdfFillRect(parts, table.x, yTop - 24, totalWidth, 24, ".96 .98 .99");
+  pdfRect(parts, table.x, yTop - 24, totalWidth, 24, 1);
+  let x = table.x;
+  table.columns.forEach(column => {
+    pdfLine(parts, x, yTop, x, yTop - 24, .7);
+    pdfText(parts, column.label, x + column.width / 2, yTop - 15, { font: "F2", size: 7.5, align: "center", charSpace: 2 });
+    x += column.width;
+  });
+  pdfLine(parts, x, yTop, x, yTop - 24, .7);
+}
+
+function drawPurchaseOrderRow(parts, row, yTop, height) {
+  const table = PURCHASE_ORDER_TABLE;
+  const totalWidth = table.columns.reduce((sum, column) => sum + column.width, 0);
+  pdfRect(parts, table.x, yTop - height, totalWidth, height, .8);
+  let x = table.x;
+  table.columns.forEach(column => {
+    pdfLine(parts, x, yTop, x, yTop - height, .6);
+    const lines = pdfCellLines(row[column.key], column.chars, column.lines || 1);
+    const textX = column.align === "right" ? x + column.width - 5 : column.align === "center" ? x + column.width / 2 : x + 5;
+    lines.forEach((line, lineIndex) => {
+      pdfText(parts, line, textX, yTop - 16 - (lineIndex * 10), {
+        size: 8,
+        align: column.align || "left"
+      });
+    });
+    x += column.width;
+  });
+  pdfLine(parts, x, yTop, x, yTop - height, .6);
+}
+
+function drawPurchaseOrderFooter(parts, orden) {
+  const retenciones = Number(orden.retencionIva || 0) + Number(orden.retencionIsr || 0);
+  pdfRect(parts, 36, 84, 455, 54, 1);
+  pdfText(parts, "OBSERVACIONES:", 44, 121, { font: "F2", size: 7 });
+  pdfCellLines(orden.observaciones || "Sin observaciones", 80, 3).forEach((line, index) => {
+    pdfText(parts, line, 44, 108 - (index * 10), { size: 9 });
+  });
+
+  pdfRect(parts, 520, 58, 236, 80, 1);
+  const totalRows = [
+    ["SUBTOTAL", money(orden.subtotal)],
+    ["IVA", money(orden.iva)],
+    ...(retenciones > 0 ? [["RETENCIONES", money(retenciones)]] : []),
+    ["TOTAL", money(orden.total)]
+  ];
+  let y = 121;
+  totalRows.forEach(([label, value], index) => {
+    if (index > 0) pdfLine(parts, 520, y + 5, 756, y + 5, .6);
+    pdfText(parts, `${label}:`, 610, y, { font: "F2", size: 9, align: "right" });
+    pdfText(parts, value, 744, y, { font: index === totalRows.length - 1 ? "F2" : "F1", size: 9, align: "right" });
+    y -= 18;
+  });
+
+  [
+    ["ELABORO", 36, 230],
+    ["AUTORIZO", 276, 470],
+    ["RECIBIO", 516, 756]
+  ].forEach(([label, x1, x2]) => {
+    pdfText(parts, label, x1, 42, { font: "F2", size: 7 });
+    pdfLine(parts, x1, 38, x2, 38, .8);
+  });
+}
+
+function drawUnderlinedField(parts, label, value, x, y, width, valueOffset) {
+  pdfText(parts, label, x, y, { size: 8 });
+  const valueX = x + valueOffset;
+  const valueWidth = Math.max(width - valueOffset - 4, 20);
+  const safeValue = pdfCellLines(value || "-", Math.floor(valueWidth / 4.4), 1)[0];
+  pdfText(parts, safeValue, valueX + 3, y + 1, { font: "F2", size: 8 });
+  pdfLine(parts, valueX, y - 5, x + width, y - 5, .8);
+}
+
+function purchaseOrderPdfRow(detalle) {
+  return {
+    cantidad: numberText(detalle.cantidad),
+    requisicion: detalle.requisicionFolio || "-",
+    medida: detalle.unidadMedida || "-",
+    descripcion: detalle.descripcion || "-",
+    material: detalle.material || "-",
+    pieza: detalle.piezaId || "-",
+    precio: money(detalle.precioUnitario),
+    subtotal: money(detalle.subtotal)
+  };
+}
+
+function purchaseOrderPdfRowHeight(row) {
+  const maxLines = Math.max(...PURCHASE_ORDER_TABLE.columns.map(column =>
+    pdfCellLines(row[column.key], column.chars, column.lines || 1).length
+  ));
+  return Math.max(30, 12 + (maxLines * 10));
+}
+
+const WORK_ORDER_PAGE = { width: 792, height: 612 };
+const WORK_ORDER_TABLE = {
+  x: 52,
+  top: 382,
+  columns: [
+    { label: "CANTIDAD", key: "cantidad", width: 96, align: "center", chars: 9 },
+    { label: "DESCRIPCION", key: "descripcion", width: 504, chars: 82, lines: 4 },
+    { label: "DIBUJO No.", key: "dibujo", width: 120, align: "center", chars: 18, lines: 2 }
+  ]
+};
+
+function ordenTrabajoStyledPdf(orden, piezas) {
+  const streams = [];
+  const rows = piezas.length ? piezas : [{ id: "", descripcion: "Sin piezas registradas" }];
+  let index = 0;
+
+  while (index < rows.length) {
+    const parts = [];
+    drawWorkOrderHeader(parts, orden);
+    drawWorkOrderTableHeader(parts);
+    let yTop = WORK_ORDER_TABLE.top - 24;
+    let rowsOnPage = 0;
+
+    while (index < rows.length) {
+      const row = workOrderPdfRow(rows[index]);
+      const rowHeight = workOrderPdfRowHeight(row);
+      const lastRow = index === rows.length - 1;
+      const bottomLimit = lastRow ? 230 : 54;
+      if (rowsOnPage > 0 && yTop - rowHeight < bottomLimit) break;
+      drawWorkOrderRow(parts, row, yTop, rowHeight);
+      yTop -= rowHeight;
+      rowsOnPage += 1;
+      index += 1;
+    }
+
+    if (index >= rows.length) {
+      drawWorkOrderFooter(parts, orden);
+    } else {
+      pdfText(parts, "Continua en la siguiente pagina", WORK_ORDER_PAGE.width - 54, 34, { size: 8, align: "right" });
+    }
+    streams.push(parts.join("\n"));
+  }
+
+  return drawnPdf(streams, WORK_ORDER_PAGE);
+}
+
+function drawWorkOrderHeader(parts, orden) {
+  pdfFillRect(parts, 52, 484, 86, 64, ".14 .19 .22");
+  pdfText(parts, "Tornos", 95, 528, { font: "F2", size: 11, color: "1 1 1", align: "center" });
+  pdfText(parts, "SA de CV", 95, 498, { font: "F2", size: 9, color: "1 1 1", align: "center" });
+
+  pdfText(parts, "TORNOS SA DE CV", 396, 536, { font: "F2", size: 13, align: "center" });
+  pdfText(parts, "ORDEN DE TRABAJO", 396, 516, { size: 13, align: "center" });
+
+  pdfRect(parts, 650, 478, 110, 70, 1);
+  [530.5, 513, 495.5].forEach(y => pdfLine(parts, 650, y, 760, y, .7));
+  pdfText(parts, "FOLIO", 705, 536, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, String(orden.id || 0).padStart(7, "0"), 705, 519, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, "FECHA", 705, 501.5, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, formatPurchaseOrderDate(orden.fecha), 705, 484, { font: "F2", size: 7, align: "center" });
+
+  drawUnderlinedField(parts, "CLIENTE:", orden.clienteNombre, 52, 452, 390, 58);
+  drawUnderlinedField(parts, "ORDEN DE COMPRA:", orden.ordenCompra || "-", 452, 452, 308, 118);
+  drawUnderlinedField(parts, "FECHA DE ENTREGA:", orden.fechaCompromiso || "-", 52, 427, 300, 116);
+}
+
+function drawWorkOrderTableHeader(parts) {
+  const table = WORK_ORDER_TABLE;
+  const totalWidth = table.columns.reduce((sum, column) => sum + column.width, 0);
+  pdfFillRect(parts, table.x, table.top - 24, totalWidth, 24, ".96 .98 .99");
+  pdfRect(parts, table.x, table.top - 24, totalWidth, 24, 1);
+  let x = table.x;
+  table.columns.forEach(column => {
+    pdfLine(parts, x, table.top, x, table.top - 24, .7);
+    pdfText(parts, column.label, x + column.width / 2, table.top - 15, { font: "F2", size: 8, align: "center", charSpace: 2 });
+    x += column.width;
+  });
+  pdfLine(parts, x, table.top, x, table.top - 24, .7);
+}
+
+function drawWorkOrderRow(parts, row, yTop, height) {
+  const table = WORK_ORDER_TABLE;
+  const totalWidth = table.columns.reduce((sum, column) => sum + column.width, 0);
+  pdfRect(parts, table.x, yTop - height, totalWidth, height, .8);
+  let x = table.x;
+  table.columns.forEach(column => {
+    pdfLine(parts, x, yTop, x, yTop - height, .6);
+    const lines = pdfCellLines(row[column.key], column.chars, column.lines || 1);
+    const textX = column.align === "center" ? x + column.width / 2 : x + 6;
+    lines.forEach((line, lineIndex) => {
+      pdfText(parts, line, textX, yTop - 16 - (lineIndex * 10), {
+        size: 8.5,
+        align: column.align || "left"
+      });
+    });
+    x += column.width;
+  });
+  pdfLine(parts, x, yTop, x, yTop - height, .6);
+}
+
+function drawWorkOrderFooter(parts, orden) {
+  pdfRect(parts, 52, 222, 720, 64, 1);
+  pdfText(parts, "OBSERVACIONES:", 60, 267, { font: "F2", size: 7 });
+  pdfCellLines(orden.observaciones || "Sin observaciones", 118, 3).forEach((line, index) => {
+    pdfText(parts, line, 60, 253 - (index * 10), { size: 9 });
+  });
+
+  [
+    ["ELABORO", 52, 245],
+    ["SUPERVISO", 300, 493],
+    ["RECIBIO", 548, 772]
+  ].forEach(([label, x1, x2]) => {
+    pdfText(parts, label, x1, 140, { font: "F2", size: 7 });
+    pdfLine(parts, x1, 136, x2, 136, .8);
+  });
+}
+
+function workOrderPdfRow(pieza) {
+  return {
+    cantidad: numberText(pieza.cantidad),
+    descripcion: `# ID: ${pieza.id || ""} ${pieza.descripcion || "Pieza no disponible"} TRATAMIENTO: ${pieza.tratamiento || "-"}`,
+    dibujo: pieza.noDibujo || ""
+  };
+}
+
+function workOrderPdfRowHeight(row) {
+  const maxLines = Math.max(...WORK_ORDER_TABLE.columns.map(column =>
+    pdfCellLines(row[column.key], column.chars, column.lines || 1).length
+  ));
+  return Math.max(38, 14 + (maxLines * 10));
+}
+
 function ordenTrabajoLines(orden, piezas) {
   return documentLines("ORDEN DE TRABAJO", orden.id, [
     ["Datos generales", [
@@ -2354,6 +2661,120 @@ function remisionLines(remision, pieza, notas) {
   return lines;
 }
 
+const REMISION_PAGE = { width: 792, height: 612 };
+const REMISION_TABLE = {
+  x: 52,
+  top: 360,
+  columns: [
+    { label: "CANTIDAD", key: "cantidad", width: 96, align: "center", chars: 9 },
+    { label: "DESCRIPCION", key: "descripcion", width: 504, chars: 82, lines: 4 },
+    { label: "DIBUJO No.", key: "dibujo", width: 120, align: "center", chars: 18, lines: 2 }
+  ]
+};
+
+function remisionStyledPdf(remision, pieza, notas = []) {
+  const parts = [];
+  drawRemisionHeader(parts, remision, pieza);
+  drawRemisionTableHeader(parts);
+  drawRemisionRow(parts, remision, pieza);
+  drawRemisionFooter(parts, remision, pieza, notas);
+  return drawnPdf([parts.join("\n")], REMISION_PAGE);
+}
+
+function drawRemisionHeader(parts, remision, pieza) {
+  pdfFillRect(parts, 52, 484, 86, 64, ".14 .19 .22");
+  pdfText(parts, "Tornos", 95, 528, { font: "F2", size: 11, color: "1 1 1", align: "center" });
+  pdfText(parts, "SA de CV", 95, 498, { font: "F2", size: 9, color: "1 1 1", align: "center" });
+
+  pdfText(parts, "TORNOS SA DE CV", 396, 536, { font: "F2", size: 13, align: "center" });
+  pdfText(parts, "REMISION", 396, 516, { size: 13, align: "center" });
+
+  pdfRect(parts, 650, 478, 110, 70, 1);
+  [530.5, 513, 495.5].forEach(y => pdfLine(parts, 650, y, 760, y, .7));
+  pdfText(parts, "FOLIO", 705, 536, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, remision.folio, 705, 519, { font: "F2", size: 7, align: "center" });
+  pdfText(parts, "FECHA", 705, 501.5, { font: "F2", size: 8, align: "center" });
+  pdfText(parts, formatPurchaseOrderDate(remision.fecha), 705, 484, { font: "F2", size: 7, align: "center" });
+
+  drawUnderlinedField(parts, "CLIENTE:", remision.clienteNombre, 52, 452, 375, 58);
+  drawUnderlinedField(parts, "ORDEN DE COMPRA:", pieza.ordenCompra || "-", 452, 452, 308, 118);
+  drawUnderlinedField(parts, "FECHA DE REMISION:", formatPurchaseOrderDate(remision.fecha), 52, 427, 300, 116);
+  drawUnderlinedField(parts, "FECHA DE ENTREGA:", pieza.fechaCompromiso || "-", 392, 427, 210, 112);
+  drawUnderlinedField(parts, "CHOFER:", remision.chofer || "-", 52, 402, 270, 54);
+  drawUnderlinedField(parts, "AUTORIZACION:", remision.autorizacion || "-", 392, 402, 210, 92);
+}
+
+function drawRemisionTableHeader(parts) {
+  const table = REMISION_TABLE;
+  const totalWidth = table.columns.reduce((sum, column) => sum + column.width, 0);
+  pdfFillRect(parts, table.x, table.top - 24, totalWidth, 24, ".96 .98 .99");
+  pdfRect(parts, table.x, table.top - 24, totalWidth, 24, 1);
+  let x = table.x;
+  table.columns.forEach(column => {
+    pdfLine(parts, x, table.top, x, table.top - 24, .7);
+    pdfText(parts, column.label, x + column.width / 2, table.top - 15, { font: "F2", size: 8, align: "center", charSpace: 2 });
+    x += column.width;
+  });
+  pdfLine(parts, x, table.top, x, table.top - 24, .7);
+}
+
+function drawRemisionRow(parts, remision, pieza) {
+  const table = REMISION_TABLE;
+  const totalWidth = table.columns.reduce((sum, column) => sum + column.width, 0);
+  const row = remisionPdfRow(remision, pieza);
+  const rowHeight = Math.max(38, 14 + (Math.max(...table.columns.map(column =>
+    pdfCellLines(row[column.key], column.chars, column.lines || 1).length
+  )) * 10));
+  const yTop = table.top - 24;
+  pdfRect(parts, table.x, yTop - rowHeight, totalWidth, rowHeight, .8);
+  let x = table.x;
+  table.columns.forEach(column => {
+    pdfLine(parts, x, yTop, x, yTop - rowHeight, .6);
+    const lines = pdfCellLines(row[column.key], column.chars, column.lines || 1);
+    const textX = column.align === "center" ? x + column.width / 2 : x + 6;
+    lines.forEach((line, lineIndex) => {
+      pdfText(parts, line, textX, yTop - 16 - (lineIndex * 10), {
+        size: 8.5,
+        align: column.align || "left"
+      });
+    });
+    x += column.width;
+  });
+  pdfLine(parts, x, yTop, x, yTop - rowHeight, .6);
+}
+
+function drawRemisionFooter(parts, remision, pieza, notas) {
+  pdfRect(parts, 52, 222, 720, 64, 1);
+  pdfText(parts, "OBSERVACIONES:", 60, 267, { font: "F2", size: 7 });
+  const observaciones = remision.observaciones || notas[0]?.nota || "Sin observaciones";
+  pdfCellLines(observaciones, 118, 3).forEach((line, index) => {
+    pdfText(parts, line, 60, 253 - (index * 10), { size: 9 });
+  });
+
+  const precioUnitario = Number(pieza.precioMxn || pieza.precio || 0);
+  const subtotal = round2(precioUnitario * Number(remision.cantidadEntregada || 0));
+  if (subtotal > 0) {
+    pdfText(parts, `VALOR: ${money(subtotal)}`, 772, 198, { font: "F2", size: 8, align: "right" });
+  }
+
+  [
+    ["ENTREGO", 52, 245],
+    ["AUTORIZO", 300, 493],
+    ["RECIBIO", 548, 772]
+  ].forEach(([label, x1, x2]) => {
+    pdfText(parts, label, x1, 140, { font: "F2", size: 7 });
+    pdfLine(parts, x1, 136, x2, 136, .8);
+  });
+}
+
+function remisionPdfRow(remision, pieza) {
+  return {
+    cantidad: numberText(remision.cantidadEntregada),
+    descripcion: `# ID: ${pieza.id} ${pieza.descripcion || "Pieza no disponible"} TRATAMIENTO: ${pieza.tratamiento || "-"} MATERIAL: ${pieza.material || "-"}`,
+    dibujo: pieza.noDibujo || pieza.noParte || "-"
+  };
+}
+
 function facturaLines(factura) {
   return documentLines("FACTURA ADMINISTRATIVA", factura.folio, [
     ["Datos generales", [
@@ -2402,6 +2823,12 @@ function sendPdf(res, filename, lines, options = {}) {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
   res.send(simplePdf(lines, options));
+}
+
+function sendPdfBuffer(res, filename, buffer) {
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  res.send(buffer);
 }
 
 function simplePdf(lines, options = {}) {
@@ -2453,6 +2880,112 @@ function simplePdf(lines, options = {}) {
   return Buffer.from(body, "utf8");
 }
 
+function drawnPdf(streams, page = {}) {
+  const width = page.width || 612;
+  const height = page.height || 792;
+  const pageObjectNumbers = streams.map((_, index) => 5 + index * 2);
+  const contentObjectNumbers = streams.map((_, index) => 6 + index * 2);
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${pageObjectNumbers.map(number => `${number} 0 R`).join(" ")}] /Count ${streams.length} >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
+  ];
+
+  streams.forEach((stream, index) => {
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pdfNumber(width)} ${pdfNumber(height)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjectNumbers[index]} 0 R >>`);
+    objects.push(`<< /Length ${Buffer.byteLength(stream)} >> stream\n${stream}\nendstream`);
+  });
+
+  let body = "%PDF-1.4\n";
+  const offsets = [];
+  for (let index = 0; index < objects.length; index++) {
+    offsets.push(Buffer.byteLength(body));
+    body += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(body);
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.forEach(offset => {
+    body += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  body += `trailer << /Root 1 0 R /Size ${objects.length + 1} >>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(body, "utf8");
+}
+
+function pdfText(parts, value, x, y, options = {}) {
+  const text = pdfSafeText(value);
+  const size = options.size || 10;
+  const font = options.font || "F1";
+  const color = options.color || "0 0 0";
+  const align = options.align || "left";
+  const textX = align === "right"
+    ? x - pdfApproxTextWidth(text, size)
+    : align === "center"
+      ? x - (pdfApproxTextWidth(text, size) / 2)
+      : x;
+  const charSpace = options.charSpace ? `${pdfNumber(options.charSpace)} Tc ` : "";
+  parts.push(`${color} rg BT /${font} ${pdfNumber(size)} Tf ${charSpace}1 0 0 1 ${pdfNumber(textX)} ${pdfNumber(y)} Tm (${escapePdf(text)}) Tj ET`);
+}
+
+function pdfRect(parts, x, y, width, height, lineWidth = 1) {
+  parts.push(`0 0 0 RG ${pdfNumber(lineWidth)} w ${pdfNumber(x)} ${pdfNumber(y)} ${pdfNumber(width)} ${pdfNumber(height)} re S`);
+}
+
+function pdfFillRect(parts, x, y, width, height, color) {
+  parts.push(`${color} rg ${pdfNumber(x)} ${pdfNumber(y)} ${pdfNumber(width)} ${pdfNumber(height)} re f`);
+}
+
+function pdfLine(parts, x1, y1, x2, y2, lineWidth = 1) {
+  parts.push(`0 0 0 RG ${pdfNumber(lineWidth)} w ${pdfNumber(x1)} ${pdfNumber(y1)} m ${pdfNumber(x2)} ${pdfNumber(y2)} l S`);
+}
+
+function pdfCellLines(value, width, maxLines = 1) {
+  const words = pdfSafeText(value || "-").replace(/\s+/g, " ").trim().split(" ");
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    if (word.length > width) {
+      if (line) {
+        lines.push(line);
+        line = "";
+      }
+      for (let index = 0; index < word.length; index += width) {
+        lines.push(word.slice(index, index + width));
+      }
+      continue;
+    }
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > width) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  if (!lines.length) lines.push("-");
+  if (lines.length <= maxLines) return lines;
+  const output = lines.slice(0, maxLines);
+  const last = output[output.length - 1];
+  output[output.length - 1] = last.length >= width ? `${last.slice(0, Math.max(width - 1, 0))}.` : `${last}.`;
+  return output;
+}
+
+function pdfSafeText(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "?");
+}
+
+function pdfApproxTextWidth(value, size) {
+  return pdfSafeText(value).length * size * 0.52;
+}
+
+function pdfNumber(value) {
+  return String(Math.round((Number(value) + Number.EPSILON) * 1000) / 1000);
+}
+
 function rtfDocument(lines) {
   return `{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}\\fs22 ${lines.map(line => `${rtfSafe(line)}\\par`).join("\n")}}`;
 }
@@ -2464,7 +2997,8 @@ function securityHeaders(req, res, next) {
     `connect-src ${connectSources}`,
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    "img-src 'self' data: blob:",
+    "frame-src 'self' blob:",
     "font-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",

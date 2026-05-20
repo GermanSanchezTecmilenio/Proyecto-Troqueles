@@ -49,6 +49,8 @@ DB_POOL_SIZE=2
 
 `APP_BOOTSTRAP_ADMIN_PASSWORD` es opcional si Aiven ya tiene importado el usuario `admin`. Define esa variable solo para una base vacia, o para resetear el password junto con `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`.
 
+La credencial operativa actual de `admin` se conserva en `config/local/credenciales-acceso.txt`, que esta ignorado por Git. No la copies a esta guia.
+
 No configures `TORNOS_API_BASE_URL` si el backend correra en Netlify Functions dentro del mismo sitio.
 
 Si `TORNOS_API_BASE_URL` quedo configurada de un intento anterior, puedes eliminarla. El build actual no la publica en `public/config.js` salvo que tambien configures `NETLIFY_USE_EXTERNAL_API=true`.

@@ -6,6 +6,8 @@ Guia para operar el sistema sin exponer credenciales, sesiones o datos sensibles
 
 Usar `config/env/.env.example` como plantilla y mantener `.env` fuera de Git.
 
+Guardar las credenciales operativas actuales solo en `config/local/credenciales-acceso.txt`; esa ruta esta ignorada por Git y sirve como referencia privada para el acceso `admin`.
+
 | Variable | Regla |
 |---|---|
 | `APP_BOOTSTRAP_ADMIN_PASSWORD` | Usarla solo para crear/resetear el admin inicial. Debe ser larga, unica y contener mayuscula, minuscula, numero y simbolo. |

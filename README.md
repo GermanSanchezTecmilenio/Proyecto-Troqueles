@@ -93,6 +93,8 @@ Usuario: valor de APP_BOOTSTRAP_ADMIN_USERNAME
 Password: valor de APP_BOOTSTRAP_ADMIN_PASSWORD
 ```
 
+Las credenciales reales del ambiente actual se documentan solo en `config/local/credenciales-acceso.txt`, que esta ignorado por Git.
+
 Si el usuario ya existe y necesitas sincronizar password, cambia temporalmente `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`, arranca una vez y vuelve a dejarlo en `false`.
 
 `APP_BOOTSTRAP_ADMIN_PASSWORD` solo es obligatorio cuando la base esta vacia y el sistema debe crear el administrador inicial, o cuando activas `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`.
@@ -179,6 +181,8 @@ DB_POOL_SIZE=2
 ```
 
 Si Aiven ya tiene el usuario `admin` importado, `APP_BOOTSTRAP_ADMIN_PASSWORD` no es necesario en Netlify. Agregalo solo para crear el admin inicial en una base vacia o para resetearlo junto con `APP_BOOTSTRAP_ADMIN_RESET_PASSWORD=true`.
+
+El acceso operativo actual de `admin` debe mantenerse en el archivo privado `config/local/credenciales-acceso.txt`, no en documentacion versionada.
 
 No definas `TORNOS_API_BASE_URL` para este despliegue. Si quedo de intentos anteriores, el build actual no la incrusta salvo que tambien definas `NETLIFY_USE_EXTERNAL_API=true`.
 

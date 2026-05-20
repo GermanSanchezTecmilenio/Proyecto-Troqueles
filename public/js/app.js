@@ -62,6 +62,8 @@ let currentSession = null;
 let currentAccess = {};
 let currentSettingsTab = "general";
 let selectedAccessProfileCode = "";
+let currentLocalDrawingPreviewUrl = "";
+let drawingPreviewRequestId = 0;
 const MENU_ICON_BASE = "/assets/menu-icons/";
 const ACCESS_ACTIONS = [
   { key: "canView", label: "Ver" },
@@ -244,6 +246,7 @@ function showLogin() {
 
 async function navigate(viewName) {
   closeNavigation();
+  releaseLocalDrawingPreview();
   const requestedViewName = views[viewName] ? viewName : "dashboard";
   const activeViewName = canAccessView(requestedViewName) ? requestedViewName : firstAccessibleView();
   const view = views[activeViewName];
@@ -254,6 +257,7 @@ async function navigate(viewName) {
   root.innerHTML = document.querySelector("#loading-template").innerHTML;
   const activeNavViewName = activeNavViewFor(activeViewName);
   nav.querySelectorAll("button").forEach(button => button.classList.toggle("active", button.dataset.view === activeNavViewName));
+  nav.querySelector("button.active")?.scrollIntoView({ block: "nearest", inline: "center" });
   try {
     await view.render();
     configureExportToolbar(activeViewName);
@@ -328,7 +332,6 @@ function renderMenuGeneral() {
     <section class="panel main-menu-panel">
       <div class="panel-title-row">
         <h3>Menu general</h3>
-        <span class="muted">Accesos principales</span>
       </div>
       <div class="app-card-grid">
         ${mainMenuItems.filter(viewName => canAccessView(viewName)).map(viewName => menuCard(viewName)).join("")}
@@ -436,7 +439,6 @@ async function renderDashboard() {
         <section class="panel">
           <div class="panel-title-row">
             <h3>Visibilidad por rubro</h3>
-            <span class="muted">Estatus operativo al ${today}</span>
           </div>
           ${table(["Rubro", "Abiertos", "Criticos", "Proximos", "Estatus", "Ir a"], rubros.map(rubro => [
             rubro.label,
@@ -1079,7 +1081,6 @@ async function renderAjustesAccesos() {
     <section class="panel settings-access-panel">
       <div class="panel-title-row">
         <h3>Accesos por perfil</h3>
-        <span class="muted">Menus y funciones disponibles</span>
       </div>
       <div class="settings-access-toolbar">
         <label>Perfil
@@ -1239,36 +1240,52 @@ async function renderPiezas() {
   await loadReferenceData();
   root.innerHTML = `
     <div class="panel">
-      <form class="form-grid" id="pieza-form">
-        <label>Cliente<select name="clienteId" required>${options(cache.clientes, "id", "nombreCliente")}</select></label>
-        <label>Estatus<select name="estatusId" required>${options(cache.estatus, "id", "descripcion")}</select></label>
-        <label>Orden compra<input name="ordenCompra"></label>
-        <label>No. parte<input name="noParte"></label>
-        <label>No. dibujo<input name="noDibujo"></label>
-        <label>Cantidad<input name="cantidad" type="number" min="1" value="1" required></label>
-        <label>Fecha requerimiento<input name="fechaRequerimiento" type="date" value="${todayDate()}"></label>
-        <label>Fecha compromiso<input name="fechaCompromiso" type="date" required></label>
-        <label>Precio<input name="precio" type="number" step="0.01" min="0" value="0"></label>
-        <label>Moneda precio<select name="monedaPrecio" id="precio-moneda"><option value="MXN">Pesos MXN</option><option value="USD">Dolares USD</option></select></label>
-        <label id="tipo-cambio-field">Tipo cambio USD/MXN<input name="tipoCambioUsdMxn" type="number" step="0.0001" min="0" value="1"></label>
-        <div class="price-hint" id="precio-mxn-preview">Precio MXN: ${formatMoney(0)}</div>
-        <label>Material<input name="material"></label>
-        <label>Tratamiento<input name="tratamiento"></label>
-        <label class="drawing-upload">Archivo / dibujo cliente
-          <input id="archivo-dibujo" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.dwg,.dxf,.step,.stp,image/*,application/pdf">
-          <input name="archivo" type="hidden">
-          <span class="drawing-file-name" id="archivo-dibujo-name">Sin dibujo seleccionado</span>
-        </label>
-        <label class="wide">Descripcion<textarea name="descripcion" required></textarea></label>
-        <input type="hidden" name="entregado" value="false">
-        <div class="wide split-actions">
-          <button>Guardar pieza</button>
-          <button class="secondary" type="button" data-next="ordenes">Generar OT</button>
+      <form class="piece-form-grid" id="pieza-form">
+        <div class="piece-editor-shell">
+          <div class="piece-controls-column">
+            <div class="piece-primary-grid">
+              <label>Cliente<select name="clienteId" required>${options(cache.clientes, "id", "nombreCliente")}</select></label>
+              <label>Estatus<select name="estatusId" required>${options(cache.estatus, "id", "descripcion")}</select></label>
+              <label>Orden compra<input name="ordenCompra"></label>
+              <label>No. parte<input name="noParte"></label>
+            </div>
+            <div class="piece-secondary-grid">
+              <label>No. dibujo<input name="noDibujo"></label>
+              <label>Cantidad<input name="cantidad" type="number" min="1" value="1" required></label>
+              <label>Fecha requerimiento<input name="fechaRequerimiento" type="date" value="${todayDate()}"></label>
+              <label>Fecha compromiso<input name="fechaCompromiso" type="date" required></label>
+            </div>
+            <label class="drawing-upload">Archivo / dibujo cliente
+              <input id="archivo-dibujo" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.dwg,.dxf,.step,.stp,image/*,application/pdf">
+              <input name="archivo" type="hidden">
+              <span class="drawing-file-name" id="archivo-dibujo-name">Sin dibujo seleccionado</span>
+            </label>
+            <label class="piece-description-field">Descripcion<textarea name="descripcion" required></textarea></label>
+            <div class="piece-meta-grid">
+              <label>Precio<input name="precio" type="number" step="0.01" min="0" value="0"></label>
+              <label>Moneda precio<select name="monedaPrecio" id="precio-moneda"><option value="MXN">Pesos MXN</option><option value="USD">Dolares USD</option></select></label>
+              <label id="tipo-cambio-field">Tipo cambio USD/MXN<input name="tipoCambioUsdMxn" type="number" step="0.0001" min="0" value="1"></label>
+              <div class="price-hint" id="precio-mxn-preview">Precio MXN: ${formatMoney(0)}</div>
+              <label>Material<input name="material"></label>
+              <label>Tratamiento<input name="tratamiento"></label>
+            </div>
+            <div class="piece-actions split-actions">
+              <button>Guardar pieza</button>
+              <button class="secondary" type="button" data-next="ordenes">Generar OT</button>
+            </div>
+          </div>
+          <section class="piece-preview-panel" aria-live="polite">
+            <h3>Visualizacion de Dibujo</h3>
+            <div id="piece-drawing-preview" class="piece-drawing-preview">
+              <span>Sin vista previa</span>
+            </div>
+          </section>
         </div>
+        <input type="hidden" name="entregado" value="false">
       </form>
     </div>
     ${table(["ID", "Cliente", "OC", "No. parte", "Descripcion", "Cant.", "Precio", "Dibujo", "Compromiso", "Estatus"], cache.piezas.map(p => [
-      p.id,
+      piecePreviewIdButton(p),
       p.clienteNombre,
       p.ordenCompra,
       p.noParte || "",
@@ -1284,6 +1301,19 @@ async function renderPiezas() {
   setupDrawingInput(piezaForm);
   piezaForm.addEventListener("submit", submitPiezaForm);
   document.querySelector("[data-next='ordenes']").addEventListener("click", () => navigate("ordenes"));
+  root.querySelectorAll("[data-piece-preview-id]").forEach(button => {
+    button.addEventListener("click", () => {
+      const pieza = cache.piezas.find(item => String(item.id) === String(button.dataset.piecePreviewId));
+      if (pieza) void setPieceDrawingPreview(pieza);
+    });
+  });
+  root.querySelectorAll("[data-drawing-open]").forEach(button => {
+    button.addEventListener("click", () => {
+      void openDrawingFile(button.dataset.drawingOpen);
+    });
+  });
+  const firstDrawablePiece = cache.piezas.find(pieza => pieza.archivo);
+  if (firstDrawablePiece) void setPieceDrawingPreview(firstDrawablePiece);
 }
 
 function setupPiezaPriceControls(form) {
@@ -1314,6 +1344,7 @@ function setupDrawingInput(form) {
     const file = input.files?.[0];
     form.archivo.value = "";
     label.textContent = file ? file.name : "Sin dibujo seleccionado";
+    setPieceDrawingPreviewFromFile(file);
   });
 }
 
@@ -1348,10 +1379,125 @@ function piecePriceLabel(pieza) {
   return formatMoney(precio);
 }
 
+function piecePreviewIdButton(pieza) {
+  return trustedHtml(`<button class="piece-preview-id-button" type="button" data-piece-preview-id="${Number(pieza.id)}">${Number(pieza.id)}</button>`);
+}
+
 function drawingLabel(archivo) {
   if (!archivo) return "";
   const name = String(archivo).split(/[\\/]/).pop();
-  return trustedHtml(`<span class="drawing-file-name">${escapeHtml(name)}</span>`);
+  return trustedHtml(`<button class="drawing-button" type="button" data-drawing-open="${escapeHtml(String(archivo))}" title="Ver dibujo ${escapeHtml(name)}">Ver</button>`);
+}
+
+async function setPieceDrawingPreview(pieza) {
+  const requestId = ++drawingPreviewRequestId;
+  releaseLocalDrawingPreview();
+  const preview = document.querySelector("#piece-drawing-preview");
+  if (!preview) return;
+  setPiecePreviewSelection(pieza.id);
+  preview.innerHTML = "<span>Cargando dibujo...</span>";
+  try {
+    const source = await drawingPreviewSource(pieza.archivo);
+    if (requestId !== drawingPreviewRequestId) {
+      if (source.objectUrl) URL.revokeObjectURL(source.objectUrl);
+      return;
+    }
+    if (source.objectUrl) currentLocalDrawingPreviewUrl = source.objectUrl;
+    preview.innerHTML = drawingPreviewHtml(source.href, `Pieza ${pieza.id}`, source.mimeType);
+  } catch (error) {
+    if (requestId === drawingPreviewRequestId) {
+      preview.innerHTML = `<span>${escapeHtml(error.message || "No se pudo cargar el dibujo")}</span>`;
+    }
+  }
+}
+
+function setPieceDrawingPreviewFromFile(file) {
+  drawingPreviewRequestId += 1;
+  releaseLocalDrawingPreview();
+  const preview = document.querySelector("#piece-drawing-preview");
+  if (!preview) return;
+  clearPiecePreviewSelection();
+  if (!file) {
+    preview.innerHTML = "<span>Sin vista previa</span>";
+    return;
+  }
+  currentLocalDrawingPreviewUrl = URL.createObjectURL(file);
+  preview.innerHTML = drawingPreviewHtml(currentLocalDrawingPreviewUrl, file.name, file.type);
+}
+
+async function drawingPreviewSource(archivo) {
+  const href = drawingHref(archivo);
+  if (!href) return { href: "", mimeType: "", objectUrl: "" };
+  if (isAuthenticatedDrawingHref(href)) {
+    const blob = await api(href);
+    const objectUrl = URL.createObjectURL(blob);
+    return { href: objectUrl, mimeType: blob.type, objectUrl };
+  }
+  return { href, mimeType: "", objectUrl: "" };
+}
+
+function drawingPreviewHtml(archivo, label = "Dibujo", mimeType = "") {
+  if (!archivo) return "<span>Sin dibujo registrado</span>";
+  const href = drawingHref(archivo);
+  const safeHref = escapeHtml(href);
+  const safeLabel = escapeHtml(label);
+  const lower = String(archivo).toLowerCase();
+  if (mimeType === "application/pdf" || lower.endsWith(".pdf")) {
+    return `<span class="piece-drawing-frame piece-drawing-frame-pdf"><iframe src="${safeHref}" title="${safeLabel}"></iframe></span>`;
+  }
+  if (mimeType.startsWith("image/") || /\.(svg|png|jpe?g|webp|gif|bmp)$/i.test(lower)) {
+    return `<span class="piece-drawing-frame"><img src="${safeHref}" alt="${safeLabel}"></span>`;
+  }
+  return `<a class="drawing-button" href="${safeHref}" target="_blank" rel="noopener">Ver archivo</a>`;
+}
+
+async function openDrawingFile(archivo) {
+  const href = drawingHref(archivo);
+  if (!href) return;
+  if (!isAuthenticatedDrawingHref(href)) {
+    window.open(href, "_blank", "noopener");
+    return;
+  }
+  const target = window.open("about:blank", "_blank");
+  if (target) target.opener = null;
+  try {
+    const blob = await api(href);
+    const objectUrl = URL.createObjectURL(blob);
+    if (target) {
+      target.location.href = objectUrl;
+    } else {
+      window.open(objectUrl, "_blank", "noopener");
+    }
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch (error) {
+    if (target) target.close();
+    window.alert(error.message || "No se pudo abrir el dibujo");
+  }
+}
+
+function drawingHref(archivo) {
+  if (!archivo) return "";
+  return /^(blob:|(https?:)?\/\/)/.test(String(archivo)) ? String(archivo) : `/${String(archivo).replace(/^\/+/, "")}`;
+}
+
+function isAuthenticatedDrawingHref(href) {
+  return String(href || "").startsWith("/") && !String(href || "").startsWith("//");
+}
+
+function releaseLocalDrawingPreview() {
+  if (!currentLocalDrawingPreviewUrl) return;
+  URL.revokeObjectURL(currentLocalDrawingPreviewUrl);
+  currentLocalDrawingPreviewUrl = "";
+}
+
+function setPiecePreviewSelection(pieceId) {
+  root.querySelectorAll("[data-piece-preview-id]").forEach(button => {
+    button.classList.toggle("is-active", String(button.dataset.piecePreviewId) === String(pieceId));
+  });
+}
+
+function clearPiecePreviewSelection() {
+  root.querySelectorAll("[data-piece-preview-id]").forEach(button => button.classList.remove("is-active"));
 }
 
 async function renderOrdenes() {
@@ -1838,7 +1984,6 @@ async function renderRequisiciones() {
     <div class="panel requisition-panel">
       <div class="panel-title-row">
         <h3>Requisicion de material</h3>
-        <span class="muted">F3 elimina la partida seleccionada</span>
       </div>
       <form class="requisition-form" id="req-form">
         <section class="requisition-entry">
@@ -2223,10 +2368,10 @@ async function renderRemisiones() {
   root.innerHTML = `
     <div class="remission-workspace">
       <section class="panel remission-entry-panel">
+        <div class="panel-title-row">
+          <h3>Nueva remision</h3>
+        </div>
         <form class="form-grid remission-form" id="rem-form">
-          <div class="panel-title-row wide">
-            <h3>Nueva remision</h3>
-          </div>
           <label class="wide">Buscar pieza<input id="rem-search" placeholder="Cliente, OC, no. parte, no. dibujo o descripcion"></label>
           <label class="wide">Pieza<select name="piezaId" required>${pendientes.map(piezaRemisionOption).join("")}</select></label>
           <label>Cantidad entregada<input name="cantidadEntregada" type="number" min="1" value="1"></label>
@@ -2236,19 +2381,18 @@ async function renderRemisiones() {
           <label class="wide">Observaciones<textarea name="observaciones"></textarea></label>
           <button>Generar remision</button>
         </form>
-        <div class="remission-pending-block">
-          <div class="panel-title-row">
-            <h3>Piezas pendientes para remitir</h3>
-          </div>
-          <div id="rem-search-results">
-            ${renderRemisionSearchTable(pendientes)}
-          </div>
+      </section>
+      <section class="panel remission-pending-panel">
+        <div class="panel-title-row">
+          <h3>Piezas pendientes</h3>
+        </div>
+        <div id="rem-search-results">
+          ${renderRemisionSearchTable(pendientes)}
         </div>
       </section>
       <section class="panel remission-history-panel">
         <div class="panel-title-row">
-          <h3>Historial de remisiones creadas</h3>
-          <span class="muted">Registros ya generados con su PDF</span>
+          <h3>Historial</h3>
         </div>
         ${table(["ID", "Folio", "Fecha", "Cliente", "Pieza", "Cantidad", "PDF"], rows.map(r => [r.id, r.folio, formatDateTime(r.fecha), r.clienteNombre, r.piezaId, r.cantidadEntregada, trustedHtml(`<button class="secondary pdf-button" data-pdf-id="${Number(r.id)}">Abrir PDF</button>`)]))}
       </section>
@@ -2961,6 +3105,7 @@ function reportText(value) {
 function configureExportToolbar(viewName) {
   const view = views[viewName] || {};
   const canExport = view.exportable === true && canUseFunction(viewName, "canExport") && hasExportableContent();
+  const showPdfExport = !["dashboard", "piezas", "monitor", "tiempos", "reportes", "remisiones"].includes(viewName);
   if (!canExport) {
     actions.innerHTML = "";
     return;
@@ -2969,7 +3114,7 @@ function configureExportToolbar(viewName) {
     <div class="split-actions toolbar-actions">
       ${canExport ? `
         <button class="secondary" type="button" id="toolbar-export-excel">Excel</button>
-        <button class="secondary" type="button" id="toolbar-export-pdf">PDF</button>
+        ${showPdfExport ? `<button class="secondary" type="button" id="toolbar-export-pdf">PDF</button>` : ""}
         <button class="secondary" type="button" id="toolbar-print">Imprimir</button>
       ` : ""}
       <span class="toolbar-status" role="status"></span>
